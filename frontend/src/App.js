@@ -15,15 +15,25 @@ function App() {
   const [fingerprint, setFingerprint] = useState(null);
 
   useEffect(() => {
-    // Initialize fingerprint
+    // Initialize fingerprint with session ID
     const initFingerprint = async () => {
       const fp = await FingerprintJS.load();
       const result = await fp.get();
-      setFingerprint(result.visitorId);
       
-      // Check if user exists
+      // Get or create session ID for this browser session
+      let sessionId = sessionStorage.getItem('session_id');
+      if (!sessionId) {
+        sessionId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        sessionStorage.setItem('session_id', sessionId);
+      }
+      
+      // Combine device fingerprint with session ID
+      const uniqueFingerprint = `${result.visitorId}_${sessionId}`;
+      setFingerprint(uniqueFingerprint);
+      
+      // Check if user exists for this session
       try {
-        const response = await fetch(`${API}/users/by-fingerprint/${result.visitorId}`);
+        const response = await fetch(`${API}/users/by-fingerprint/${uniqueFingerprint}`);
         if (response.ok) {
           const userData = await response.json();
           setUser(userData);
@@ -39,9 +49,11 @@ function App() {
   }, []);
 
   const handleLogout = () => {
+    // Clear session - this will force new registration on next visit
+    sessionStorage.removeItem('session_id');
     setUser(null);
-    // Note: In production, you'd want to clear the fingerprint from server
-    // For now, we just clear the local state
+    // Reload to get new session ID
+    window.location.reload();
   };
 
   if (loading) {
