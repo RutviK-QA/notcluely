@@ -226,7 +226,11 @@ const Calendar = ({ user, setUser }) => {
 
   const getWeekDays = () => {
     const startOfWeek = currentDate.startOf('week');
-    return Array.from({ length: 7 }, (_, i) => startOfWeek.plus({ days: i }));
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      days.push(startOfWeek.plus({ days: i }));
+    }
+    return days;
   };
 
   const getHours = () => {
