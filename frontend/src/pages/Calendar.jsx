@@ -300,7 +300,7 @@ const Calendar = ({ user, setUser }) => {
                 <AlertTriangle className="w-4 h-4 mr-2" />
                 Conflicts
                 <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                  {user.is_admin ? conflicts.length : userConflicts.length}
+                  {user.is_admin ? conflicts.length : getUserConflicts().length}
                 </span>
               </Button>
             )}
