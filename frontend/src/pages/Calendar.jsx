@@ -43,40 +43,13 @@ const Calendar = ({ user, setUser }) => {
     fetchConflicts();
     fetchTimezones();
 
-    // Setup WebSocket connection
-    const socket = io(WS_URL, {
-      path: '/ws',
-      transports: ['websocket', 'polling']
-    });
-
-    socket.on('connect', () => {
-      console.log('WebSocket connected');
-    });
-
-    socket.on('booking_created', () => {
-      fetchBookings();
-      fetchConflicts();
-    });
-
-    socket.on('booking_deleted', () => {
-      fetchBookings();
-      fetchConflicts();
-    });
-
-    socket.on('conflict_resolved', () => {
-      fetchConflicts();
-    });
-
-    socketRef.current = socket;
-
-    // Polling fallback every 30 seconds
+    // Polling for real-time updates every 10 seconds
     const interval = setInterval(() => {
       fetchBookings();
       fetchConflicts();
-    }, 30000);
+    }, 10000);
 
     return () => {
-      socket.disconnect();
       clearInterval(interval);
     };
   }, []);
