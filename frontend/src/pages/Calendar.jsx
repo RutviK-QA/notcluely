@@ -225,22 +225,21 @@ const Calendar = ({ user, setUser }) => {
   };
 
   const getWeekDays = () => {
-    if (!currentDate || !currentDate.isValid) {
-      const now = DateTime.now().setZone(user.timezone);
-      const startOfWeek = now.startOf('week');
+    try {
+      const effectiveDate = currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone);
+      const startOfWeek = effectiveDate.startOf('week');
       const days = [];
       for (let i = 0; i < 7; i++) {
-        days.push(startOfWeek.plus({ days: i }));
+        const day = startOfWeek.plus({ days: i });
+        if (day && day.isValid) {
+          days.push(day);
+        }
       }
-      return days;
+      return days.length === 7 ? days : [];
+    } catch (error) {
+      console.error('Error in getWeekDays:', error);
+      return [];
     }
-    
-    const startOfWeek = currentDate.startOf('week');
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      days.push(startOfWeek.plus({ days: i }));
-    }
-    return days;
   };
 
   const getHours = () => {
