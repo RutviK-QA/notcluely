@@ -16,7 +16,10 @@ const API = `${BACKEND_URL}/api`;
 const Calendar = ({ user, setUser, onLogout }) => {
   const [bookings, setBookings] = useState([]);
   const [conflicts, setConflicts] = useState([]);
-  const [currentDate, setCurrentDate] = useState(DateTime.now().setZone(user.timezone));
+  const [currentDate, setCurrentDate] = useState(() => {
+    // Ensure we ALWAYS start with a valid DateTime
+    return DateTime.now().setZone(user.timezone);
+  });
   const [showBookingDialog, setShowBookingDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showConflictsDialog, setShowConflictsDialog] = useState(false);
