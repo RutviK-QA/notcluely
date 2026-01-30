@@ -184,10 +184,11 @@ const Calendar = ({ user, setUser, onLogout, token }) => {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch(`${API}/bookings?user_id=${user.id}`, {
+      const response = await fetch(`${API}/bookings`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           title,
