@@ -369,12 +369,11 @@ const Calendar = ({ user, setUser }) => {
           {/* Week Header */}
           <div className="grid grid-cols-8 border-b border-gray-800">
             <div className="p-3 border-r border-gray-800 bg-[#151515] text-sm text-gray-500">Time</div>
-            {weekDays.map((day, idx) => {
-              const dayDate = day.toISO();
+            {getWeekDays().map((day, idx) => {
               const isToday = day.hasSame(DateTime.now().setZone(user.timezone), 'day');
               return (
                 <div
-                  key={`header-${dayDate}-${idx}`}
+                  key={`header-day-${idx}`}
                   className="p-3 border-r border-gray-800 bg-[#151515] text-center"
                 >
                   <div className="text-sm text-gray-400">{day.toFormat('EEE')}</div>
