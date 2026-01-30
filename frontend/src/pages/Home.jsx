@@ -11,23 +11,39 @@ const API = `${BACKEND_URL}/api`;
 
 const Home = ({ fingerprint, setUser }) => {
   const [name, setName] = useState('');
-  const [timezone, setTimezone] = useState('');
+  const [timezone, setTimezone] = useState(() => {
+    // Initialize with detected timezone immediately
+    try {
+      return DateTime.local().zoneName || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  });
   const [timezones, setTimezones] = useState([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Auto-detect timezone
-    const detectedTimezone = DateTime.local().zoneName;
-    setTimezone(detectedTimezone);
+    // Auto-detect timezone and ensure it's set
+    try {
+      const detectedTimezone = DateTime.local().zoneName || 'UTC';
+      setTimezone(detectedTimezone);
+    } catch (error) {
+      console.error('Error detecting timezone:', error);
+      setTimezone('UTC');
+    }
 
     // Fetch available timezones
     const fetchTimezones = async () => {
       try {
         const response = await fetch(`${API}/timezones`);
-        const data = await response.json();
-        setTimezones(data.timezones);
+        if (response.ok) {
+          const data = await response.json();
+          setTimezones(data.timezones);
+        }
       } catch (error) {
         console.error('Error fetching timezones:', error);
+        // Fallback to common timezones if fetch fails
+        setTimezones(['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Asia/Tokyo']);
       }
     };
 
