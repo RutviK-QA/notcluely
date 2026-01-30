@@ -387,68 +387,72 @@ const Calendar = ({ user, setUser }) => {
 
           {/* Time Slots */}
           <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 300px)' }}>
-            {hours.map((hour) => (
-              <div key={`hour-${hour}`} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
-                <div className="p-3 border-r border-gray-800 text-sm text-gray-500 flex items-start">
-                  {DateTime.fromObject({ hour }).toFormat('ha')}
-                </div>
-                {weekDays.map((day) => {
-                  const slotBookings = getBookingsForSlot(day, hour);
-                  const dayKey = day.toISO();
-                  return (
-                    <div
-                      key={`${dayKey}-${hour}`}
-                      data-testid={`time-slot-${day.toFormat('yyyy-MM-dd')}-${hour}`}
-                      onClick={() => slotBookings.length === 0 && handleSlotClick(day, hour)}
-                      className={`p-2 border-r border-gray-800 min-h-[60px] relative ${
-                        slotBookings.length === 0 ? 'cursor-pointer hover:bg-[#1a1a1a]' : ''
-                      }`}
-                    >
-                      {slotBookings.map((booking, idx) => {
-                        const isConflict = hasConflict(booking);
-                        const isOwner = booking.user_id === user.id;
-                        return (
-                          <div
-                            key={`booking-${booking.id}-${idx}`}
-                            data-testid={`booking-${booking.id}`}
-                            className={`text-xs p-2 rounded mb-1 ${
-                              isConflict
-                                ? 'bg-red-900/50 border border-red-500'
-                                : 'bg-cyan-900/30 border border-cyan-700'
-                            } ${isOwner ? 'font-semibold' : ''}`}
-                            style={{ zIndex: 10 + idx }}
-                          >
-                            <div className="flex items-start justify-between gap-1">
-                              <div className="flex-1 min-w-0">
-                                <div className="truncate font-medium">{booking.title}</div>
-                                <div className="text-gray-400 truncate">{booking.user_name}</div>
+            {getHours().map((hour) => {
+              const weekDays = getWeekDays();
+              return (
+                <div key={`hour-${hour}`} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
+                  <div className="p-3 border-r border-gray-800 text-sm text-gray-500 flex items-start">
+                    {DateTime.fromObject({ hour }).toFormat('ha')}
+                  </div>
+                  {weekDays.map((day, dayIdx) => {
+                    const slotBookings = getBookingsForSlot(day, hour);
+                    return (
+                      <div
+                        key={`slot-${hour}-${dayIdx}`}
+                        data-testid={`time-slot-${day.toFormat('yyyy-MM-dd')}-${hour}`}
+                        onClick={() => slotBookings.length === 0 && handleSlotClick(day, hour)}
+                        className={`p-2 border-r border-gray-800 min-h-[60px] relative ${
+                          slotBookings.length === 0 ? 'cursor-pointer hover:bg-[#1a1a1a]' : ''
+                        }`}
+                      >
+                        {slotBookings.map((booking, idx) => {
+                          const isConflict = hasConflict(booking);
+                          const isOwner = booking.user_id === user.id;
+                          return (
+                            <div
+                              key={`booking-${booking.id}-${idx}`}
+                              data-testid={`booking-${booking.id}`}
+                              className={`text-xs p-2 rounded mb-1 ${
+                                isConflict
+                                  ? 'bg-red-900/50 border border-red-500'
+                                  : 'bg-cyan-900/30 border border-cyan-700'
+                              } ${isOwner ? 'font-semibold' : ''}`}
+                              style={{ zIndex: 10 + idx }}
+                            >
+                              <div className="flex items-start justify-between gap-1">
+                                <div className="flex-1 min-w-0">
+                                  <div className="truncate font-medium">{booking.title}</div>
+                                  <div className="text-gray-400 truncate">{booking.user_name}</div>
+                                </div>
+                                {(isOwner || user.is_admin) && (
+                                  <button
+                                    data-testid={`delete-booking-${booking.id}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setBookingToDelete(booking);
+                                      setShowDeleteDialog(true);
+                                    }}
+                                    className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
                               </div>
-                              {(isOwner || user.is_admin) && (
-                                <button
-                                  data-testid={`delete-booking-${booking.id}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setBookingToDelete(booking);
-                                    setShowDeleteDialog(true);
-                                  }}
-                                  className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
+                              {isConflict && (
+                                <div className="flex items-center gap-1 mt-1 text-red-400">
+                                  <AlertTriangle className="w-3 h-3" />
+                                  <span className="text-[10px]">Conflict</span>
+                                </div>
                               )}
                             </div>
-                            {isConflict && (
-                              <div className="flex items-center gap-1 mt-1 text-red-400">
-                                <AlertTriangle className="w-3 h-3" />
-                                <span className="text-[10px]">Conflict</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
               </div>
             ))}
           </div>
