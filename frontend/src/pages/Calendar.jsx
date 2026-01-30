@@ -225,6 +225,16 @@ const Calendar = ({ user, setUser }) => {
   };
 
   const getWeekDays = () => {
+    if (!currentDate || !currentDate.isValid) {
+      const now = DateTime.now().setZone(user.timezone);
+      const startOfWeek = now.startOf('week');
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        days.push(startOfWeek.plus({ days: i }));
+      }
+      return days;
+    }
+    
     const startOfWeek = currentDate.startOf('week');
     const days = [];
     for (let i = 0; i < 7; i++) {
