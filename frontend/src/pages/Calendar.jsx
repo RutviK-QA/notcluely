@@ -346,7 +346,7 @@ const Calendar = ({ user, setUser, onLogout, token }) => {
           <div>
             <h1 className="text-2xl font-bold" style={{ fontFamily: 'Manrope, sans-serif' }}>notcluely</h1>
             <p className="text-sm text-gray-400">
-              Welcome, {user.name} 
+              Welcome, {user.username} 
               {user.is_admin && <span className="ml-2 px-2 py-0.5 bg-cyan-600 text-white text-xs rounded font-semibold">ADMIN</span>}
             </p>
           </div>
