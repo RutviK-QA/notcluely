@@ -290,7 +290,7 @@ const Calendar = ({ user, setUser, onLogout }) => {
 
   const userConflicts = getUserConflicts();
 
-  // Compute these during render
+  // Compute these during render with memoization
   const weekDays = React.useMemo(() => {
     if (!currentDate || !currentDate.isValid) {
       return [];
@@ -301,6 +301,13 @@ const Calendar = ({ user, setUser, onLogout }) => {
       days.push(startOfWeek.plus({ days: i }));
     }
     return days;
+  }, [currentDate]);
+
+  const monthDisplay = React.useMemo(() => {
+    if (!currentDate || !currentDate.isValid) {
+      return 'Loading...';
+    }
+    return currentDate.toFormat('MMMM yyyy');
   }, [currentDate]);
 
   const hours = getHours();
