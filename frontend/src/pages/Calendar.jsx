@@ -78,10 +78,17 @@ const Calendar = ({ user, setUser, onLogout, token }) => {
 
   const fetchBookings = async () => {
     try {
-      const response = await fetch(`${API}/bookings`);
+      const response = await fetch(`${API}/bookings`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         setBookings(data);
+      } else if (response.status === 401) {
+        toast.error('Session expired. Please log in again.');
+        onLogout();
       }
     } catch (error) {
       console.error('Error fetching bookings:', error);
@@ -90,7 +97,11 @@ const Calendar = ({ user, setUser, onLogout, token }) => {
 
   const fetchConflicts = async () => {
     try {
-      const response = await fetch(`${API}/conflicts`);
+      const response = await fetch(`${API}/conflicts`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         setConflicts(data);
