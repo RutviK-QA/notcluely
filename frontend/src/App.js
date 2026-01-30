@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import '@/App.css';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import FingerprintJS from '@fingerprintjs/fingerprintjs';
-import Home from './pages/Home';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Login from './pages/Login';
+import Register from './pages/Register';
 import Calendar from './pages/Calendar';
 import { Toaster } from './components/ui/sonner';
 
@@ -12,48 +12,51 @@ const API = `${BACKEND_URL}/api`;
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [fingerprint, setFingerprint] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('auth_token'));
 
   useEffect(() => {
-    // Initialize fingerprint with session ID
-    const initFingerprint = async () => {
-      const fp = await FingerprintJS.load();
-      const result = await fp.get();
-      
-      // Get or create session ID for this browser session
-      let sessionId = sessionStorage.getItem('session_id');
-      if (!sessionId) {
-        sessionId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
-        sessionStorage.setItem('session_id', sessionId);
-      }
-      
-      // Combine device fingerprint with session ID
-      const uniqueFingerprint = `${result.visitorId}_${sessionId}`;
-      setFingerprint(uniqueFingerprint);
-      
-      // Check if user exists for this session
-      try {
-        const response = await fetch(`${API}/users/by-fingerprint/${uniqueFingerprint}`);
-        if (response.ok) {
-          const userData = await response.json();
-          setUser(userData);
+    // Check if user is logged in
+    const checkAuth = async () => {
+      const storedToken = localStorage.getItem('auth_token');
+      if (storedToken) {
+        try {
+          const response = await fetch(`${API}/auth/me`, {
+            headers: {
+              'Authorization': `Bearer ${storedToken}`
+            }
+          });
+          
+          if (response.ok) {
+            const userData = await response.json();
+            setUser(userData);
+            setToken(storedToken);
+          } else {
+            // Token invalid, clear it
+            localStorage.removeItem('auth_token');
+            setToken(null);
+          }
+        } catch (error) {
+          console.error('Auth check failed:', error);
+          localStorage.removeItem('auth_token');
+          setToken(null);
         }
-      } catch (error) {
-        console.error('Error checking user:', error);
-      } finally {
-        setLoading(false);
       }
+      setLoading(false);
     };
 
-    initFingerprint();
+    checkAuth();
   }, []);
 
+  const handleLogin = (newToken, userData) => {
+    localStorage.setItem('auth_token', newToken);
+    setToken(newToken);
+    setUser(userData);
+  };
+
   const handleLogout = () => {
-    // Clear session - this will force new registration on next visit
-    sessionStorage.removeItem('session_id');
+    localStorage.removeItem('auth_token');
+    setToken(null);
     setUser(null);
-    // Reload to get new session ID
-    window.location.reload();
   };
 
   if (loading) {
@@ -70,14 +73,16 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route 
+            path="/login" 
+            element={!user ? <Login onLogin={handleLogin} /> : <Navigate to="/" />} 
+          />
+          <Route 
+            path="/register" 
+            element={!user ? <Register onRegister={handleLogin} /> : <Navigate to="/" />} 
+          />
+          <Route 
             path="/" 
-            element={
-              user ? (
-                <Calendar user={user} setUser={setUser} onLogout={handleLogout} />
-              ) : (
-                <Home fingerprint={fingerprint} setUser={setUser} />
-              )
-            } 
+            element={user ? <Calendar user={user} setUser={setUser} onLogout={handleLogout} token={token} /> : <Navigate to="/login" />} 
           />
         </Routes>
       </BrowserRouter>
