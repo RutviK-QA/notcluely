@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -8,9 +9,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pytz
-import json
+from passlib.context import CryptContext
+from jose import JWTError, jwt
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -20,48 +22,93 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT settings
+SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+
+# Security
+security = HTTPBearer()
+
 # Create the main app without a prefix
 app = FastAPI()
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
+# Helper functions
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-    async def broadcast(self, message: dict):
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except:
-                pass
-
-manager = ConnectionManager()
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Your session expired. Please log in again.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if user is None:
+        raise credentials_exception
+    
+    # Convert ISO string timestamps back to datetime
+    if isinstance(user.get('created_at'), str):
+        user['created_at'] = datetime.fromisoformat(user['created_at'])
+    
+    return user
 
 # Models
-class UserCreate(BaseModel):
-    name: str
-    fingerprint: str
-    timezone: str
+class UserRegister(BaseModel):
+    username: str
+    password: str
+    timezone: str = "UTC"
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
 
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    fingerprint: str
+    username: str
+    password_hash: str
     timezone: str
     is_admin: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    username: str
+    timezone: str
+    is_admin: bool
+    created_at: datetime
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
 class BookingCreate(BaseModel):
     title: str
@@ -101,23 +148,39 @@ class ConflictNotification(BaseModel):
 async def root():
     return {"message": "NotCluely API"}
 
-# User routes
-@api_router.post("/users/register", response_model=User)
-async def register_user(user_data: UserCreate):
-    # Check if fingerprint already exists
-    existing = await db.users.find_one({"fingerprint": user_data.fingerprint}, {"_id": 0})
+# Auth routes
+@api_router.post("/auth/register", response_model=TokenResponse)
+async def register(user_data: UserRegister):
+    # Validate input
+    username = user_data.username.strip().lower()
+    
+    if len(username) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username must be at least 3 characters"
+        )
+    
+    if len(user_data.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters"
+        )
+    
+    # Check if username already exists (case-insensitive)
+    existing = await db.users.find_one({"username": username})
     if existing:
-        # Convert ISO string timestamps back to datetime
-        if isinstance(existing['created_at'], str):
-            existing['created_at'] = datetime.fromisoformat(existing['created_at'])
-        return User(**existing)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already taken"
+        )
     
-    # Check if user should be admin (name is "rutvik", case-insensitive)
-    is_admin = user_data.name.lower().strip() == "rutvik"
+    # Check if user should be admin (username is "rutvik", case-insensitive)
+    is_admin = username == "rutvik"
     
+    # Create user
     user = User(
-        name=user_data.name,
-        fingerprint=user_data.fingerprint,
+        username=username,
+        password_hash=get_password_hash(user_data.password),
         timezone=user_data.timezone,
         is_admin=is_admin
     )
@@ -126,23 +189,85 @@ async def register_user(user_data: UserCreate):
     doc['created_at'] = doc['created_at'].isoformat()
     
     await db.users.insert_one(doc)
-    return user
-
-@api_router.get("/users/by-fingerprint/{fingerprint}", response_model=User)
-async def get_user_by_fingerprint(fingerprint: str):
-    user = await db.users.find_one({"fingerprint": fingerprint}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
     
-    if isinstance(user['created_at'], str):
+    # Create access token
+    access_token = create_access_token(data={"sub": user.id})
+    
+    user_response = UserResponse(
+        id=user.id,
+        username=user.username,
+        timezone=user.timezone,
+        is_admin=user.is_admin,
+        created_at=user.created_at
+    )
+    
+    return TokenResponse(access_token=access_token, user=user_response)
+
+@api_router.post("/auth/login", response_model=TokenResponse)
+async def login(user_data: UserLogin):
+    # Find user (case-insensitive username)
+    username = user_data.username.strip().lower()
+    user = await db.users.find_one({"username": username}, {"_id": 0})
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+    
+    # Verify password
+    if not verify_password(user_data.password, user['password_hash']):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+    
+    # Update admin status on every login (in case username changes)
+    is_admin = username == "rutvik"
+    if user.get('is_admin') != is_admin:
+        await db.users.update_one(
+            {"id": user['id']},
+            {"$set": {"is_admin": is_admin}}
+        )
+        user['is_admin'] = is_admin
+    
+    # Create access token
+    access_token = create_access_token(data={"sub": user['id']})
+    
+    # Convert ISO string timestamps
+    if isinstance(user.get('created_at'), str):
         user['created_at'] = datetime.fromisoformat(user['created_at'])
     
-    return User(**user)
+    user_response = UserResponse(
+        id=user['id'],
+        username=user['username'],
+        timezone=user['timezone'],
+        is_admin=user['is_admin'],
+        created_at=user['created_at']
+    )
+    
+    return TokenResponse(access_token=access_token, user=user_response)
 
-@api_router.put("/users/{user_id}/timezone")
-async def update_user_timezone(user_id: str, timezone: str):
+@api_router.get("/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return UserResponse(
+        id=current_user['id'],
+        username=current_user['username'],
+        timezone=current_user['timezone'],
+        is_admin=current_user['is_admin'],
+        created_at=current_user['created_at']
+    )
+
+@api_router.post("/auth/logout")
+async def logout():
+    # In JWT, logout is handled client-side by removing the token
+    return {"message": "Logged out successfully"}
+
+# User routes
+@api_router.put("/users/timezone")
+async def update_user_timezone(timezone: str, current_user: dict = Depends(get_current_user)):
     result = await db.users.update_one(
-        {"id": user_id},
+        {"id": current_user['id']},
         {"$set": {"timezone": timezone}}
     )
     
@@ -151,24 +276,21 @@ async def update_user_timezone(user_id: str, timezone: str):
     
     return {"success": True}
 
-@api_router.get("/users", response_model=List[User])
-async def get_all_users():
-    users = await db.users.find({}, {"_id": 0}).to_list(1000)
+@api_router.get("/users", response_model=List[UserResponse])
+async def get_all_users(current_user: dict = Depends(get_current_user)):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
     
+    result = []
     for user in users:
         if isinstance(user['created_at'], str):
             user['created_at'] = datetime.fromisoformat(user['created_at'])
+        result.append(UserResponse(**user))
     
-    return users
+    return result
 
 # Booking routes
 @api_router.post("/bookings", response_model=Booking)
-async def create_booking(booking_data: BookingCreate, user_id: str):
-    # Get user info
-    user = await db.users.find_one({"id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
+async def create_booking(booking_data: BookingCreate, current_user: dict = Depends(get_current_user)):
     # Check for conflicts
     start_dt = datetime.fromisoformat(booking_data.start_time.replace('Z', '+00:00'))
     end_dt = datetime.fromisoformat(booking_data.end_time.replace('Z', '+00:00'))
@@ -185,8 +307,8 @@ async def create_booking(booking_data: BookingCreate, user_id: str):
             conflicts.append(existing)
     
     booking = Booking(
-        user_id=user_id,
-        user_name=user['name'],
+        user_id=current_user['id'],
+        user_name=current_user['username'],
         title=booking_data.title,
         start_time=booking_data.start_time,
         end_time=booking_data.end_time,
@@ -205,9 +327,9 @@ async def create_booking(booking_data: BookingCreate, user_id: str):
             booking1_id=conflict['id'],
             booking2_id=booking.id,
             user1_id=conflict['user_id'],
-            user2_id=user_id,
+            user2_id=current_user['id'],
             user1_name=conflict['user_name'],
-            user2_name=user['name'],
+            user2_name=current_user['username'],
             conflict_start=max(booking_data.start_time, conflict['start_time']),
             conflict_end=min(booking_data.end_time, conflict['end_time'])
         )
@@ -217,17 +339,10 @@ async def create_booking(booking_data: BookingCreate, user_id: str):
         
         await db.conflicts.insert_one(conflict_doc)
     
-    # Broadcast to all connected clients
-    await manager.broadcast({
-        "type": "booking_created",
-        "booking": doc,
-        "has_conflicts": len(conflicts) > 0
-    })
-    
     return booking
 
 @api_router.get("/bookings", response_model=List[Booking])
-async def get_bookings():
+async def get_bookings(current_user: dict = Depends(get_current_user)):
     bookings = await db.bookings.find({}, {"_id": 0}).to_list(1000)
     
     for booking in bookings:
@@ -237,22 +352,20 @@ async def get_bookings():
     return bookings
 
 @api_router.delete("/bookings/{booking_id}")
-async def delete_booking(booking_id: str, user_id: str):
-    # Get user to check if admin
-    user = await db.users.find_one({"id": user_id}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
+async def delete_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
     # Get booking
     booking = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     
     # Check if user owns the booking or is admin
-    if booking['user_id'] != user_id and not user.get('is_admin', False):
-        raise HTTPException(status_code=403, detail="Not authorized to delete this booking")
+    if booking['user_id'] != current_user['id'] and not current_user.get('is_admin', False):
+        raise HTTPException(
+            status_code=403, 
+            detail="You do not have permission to delete this booking"
+        )
     
-    result = await db.bookings.delete_one({"id": booking_id})
+    await db.bookings.delete_one({"id": booking_id})
     
     # Delete related conflicts
     await db.conflicts.delete_many({
@@ -262,17 +375,11 @@ async def delete_booking(booking_id: str, user_id: str):
         ]
     })
     
-    # Broadcast deletion
-    await manager.broadcast({
-        "type": "booking_deleted",
-        "booking_id": booking_id
-    })
-    
     return {"success": True}
 
 # Conflict routes
 @api_router.get("/conflicts", response_model=List[ConflictNotification])
-async def get_conflicts():
+async def get_conflicts(current_user: dict = Depends(get_current_user)):
     conflicts = await db.conflicts.find({"resolved": False}, {"_id": 0}).to_list(1000)
     
     for conflict in conflicts:
@@ -281,12 +388,12 @@ async def get_conflicts():
     
     return conflicts
 
-@api_router.get("/conflicts/user/{user_id}", response_model=List[ConflictNotification])
-async def get_user_conflicts(user_id: str):
+@api_router.get("/conflicts/user", response_model=List[ConflictNotification])
+async def get_user_conflicts(current_user: dict = Depends(get_current_user)):
     conflicts = await db.conflicts.find({
         "$or": [
-            {"user1_id": user_id},
-            {"user2_id": user_id}
+            {"user1_id": current_user['id']},
+            {"user2_id": current_user['id']}
         ],
         "resolved": False
     }, {"_id": 0}).to_list(1000)
@@ -298,7 +405,7 @@ async def get_user_conflicts(user_id: str):
     return conflicts
 
 @api_router.put("/conflicts/{conflict_id}/resolve")
-async def resolve_conflict(conflict_id: str):
+async def resolve_conflict(conflict_id: str, current_user: dict = Depends(get_current_user)):
     result = await db.conflicts.update_one(
         {"id": conflict_id},
         {"$set": {"resolved": True}}
@@ -307,29 +414,12 @@ async def resolve_conflict(conflict_id: str):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Conflict not found")
     
-    # Broadcast conflict resolution
-    await manager.broadcast({
-        "type": "conflict_resolved",
-        "conflict_id": conflict_id
-    })
-    
     return {"success": True}
 
 # Timezone utility endpoint
 @api_router.get("/timezones")
 async def get_timezones():
     return {"timezones": pytz.all_timezones}
-
-# WebSocket endpoint
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
-    try:
-        while True:
-            # Keep connection alive
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket)
 
 # Include the router in the main app
 app.include_router(api_router)
