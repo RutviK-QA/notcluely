@@ -39,15 +39,25 @@ const Calendar = ({ user, setUser, onLogout }) => {
     // Initialize timezone and fetch data
     const initialize = async () => {
       try {
-        await Promise.all([
+        const results = await Promise.allSettled([
           fetchBookings(),
           fetchConflicts(),
           fetchTimezones()
         ]);
+        
+        // Log any failures but continue
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            const names = ['bookings', 'conflicts', 'timezones'];
+            console.error(`Failed to fetch ${names[index]}:`, result.reason);
+          }
+        });
+        
         setIsInitialized(true);
       } catch (error) {
         console.error('Initialization error:', error);
-        toast.error('Failed to load calendar data');
+        // Still set initialized to true to show the calendar
+        setIsInitialized(true);
       }
     };
 
