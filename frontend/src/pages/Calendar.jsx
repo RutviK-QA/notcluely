@@ -262,8 +262,11 @@ const Calendar = ({ user, setUser, onLogout }) => {
     const startOfWeek = currentDate.startOf('week');
     const days = [];
     for (let i = 0; i < 7; i++) {
-      days.push(startOfWeek.plus({ days: i }));
+      const day = startOfWeek.plus({ days: i });
+      days.push(day);
     }
+    console.log('getWeekDays - currentDate:', currentDate.toISO(), 'isValid:', currentDate.isValid);
+    console.log('getWeekDays - days[0]:', days[0]?.toISO(), 'isValid:', days[0]?.isValid);
     return days;
   };
 
