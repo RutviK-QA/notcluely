@@ -375,15 +375,16 @@ const Calendar = ({ user, setUser }) => {
           {/* Time Slots */}
           <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 300px)' }}>
             {hours.map((hour) => (
-              <div key={hour} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
+              <div key={`hour-${hour}`} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
                 <div className="p-3 border-r border-gray-800 text-sm text-gray-500 flex items-start">
                   {DateTime.fromObject({ hour }).toFormat('ha')}
                 </div>
                 {weekDays.map((day) => {
                   const slotBookings = getBookingsForSlot(day, hour);
+                  const dayKey = day.toISO();
                   return (
                     <div
-                      key={`${day.toISODate()}-${hour}`}
+                      key={`${dayKey}-${hour}`}
                       data-testid={`time-slot-${day.toFormat('yyyy-MM-dd')}-${hour}`}
                       onClick={() => slotBookings.length === 0 && handleSlotClick(day, hour)}
                       className={`p-2 border-r border-gray-800 min-h-[60px] relative ${
@@ -395,7 +396,7 @@ const Calendar = ({ user, setUser }) => {
                         const isOwner = booking.user_id === user.id;
                         return (
                           <div
-                            key={booking.id}
+                            key={`booking-${booking.id}-${idx}`}
                             data-testid={`booking-${booking.id}`}
                             className={`text-xs p-2 rounded mb-1 ${
                               isConflict
@@ -409,7 +410,7 @@ const Calendar = ({ user, setUser }) => {
                                 <div className="truncate font-medium">{booking.title}</div>
                                 <div className="text-gray-400 truncate">{booking.user_name}</div>
                               </div>
-                              {isOwner && (
+                              {(isOwner || user.is_admin) && (
                                 <button
                                   data-testid={`delete-booking-${booking.id}`}
                                   onClick={(e) => {
@@ -432,6 +433,9 @@ const Calendar = ({ user, setUser }) => {
                           </div>
                         );
                       })}
+                    </div>
+                  );
+                })}
                     </div>
                   );
                 })}
