@@ -343,7 +343,7 @@ const Calendar = ({ user, setUser }) => {
             Next
           </Button>
           <span className="text-lg font-medium ml-4">
-            {currentDate.toFormat('MMMM yyyy')}
+            {currentDate && currentDate.isValid ? currentDate.toFormat('MMMM yyyy') : DateTime.now().setZone(user.timezone).toFormat('MMMM yyyy')}
           </span>
         </div>
 
