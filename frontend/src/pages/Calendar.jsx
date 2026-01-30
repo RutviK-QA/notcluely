@@ -661,7 +661,7 @@ const Calendar = ({ user, setUser }) => {
             {(user.is_admin ? conflicts : getUserConflicts()).length === 0 ? (
               <p className="text-gray-500 text-center py-8">No active conflicts</p>
             ) : (
-              (user.is_admin ? conflicts : userConflicts).map((conflict) => {
+              (user.is_admin ? conflicts : getUserConflicts()).map((conflict) => {
                 const startLocal = DateTime.fromISO(conflict.conflict_start, { zone: 'utc' }).setZone(user.timezone);
                 const endLocal = DateTime.fromISO(conflict.conflict_end, { zone: 'utc' }).setZone(user.timezone);
                 
