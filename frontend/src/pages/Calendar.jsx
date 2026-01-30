@@ -322,7 +322,10 @@ const Calendar = ({ user, setUser }) => {
       <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button
-            onClick={() => setCurrentDate(currentDate.minus({ weeks: 1 }))}
+            onClick={() => {
+              const effectiveDate = currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone);
+              setCurrentDate(effectiveDate.minus({ weeks: 1 }));
+            }}
             variant="outline"
             className="border-gray-700 text-white hover:bg-gray-800"
           >
@@ -336,7 +339,10 @@ const Calendar = ({ user, setUser }) => {
             Today
           </Button>
           <Button
-            onClick={() => setCurrentDate(currentDate.plus({ weeks: 1 }))}
+            onClick={() => {
+              const effectiveDate = currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone);
+              setCurrentDate(effectiveDate.plus({ weeks: 1 }));
+            }}
             variant="outline"
             className="border-gray-700 text-white hover:bg-gray-800"
           >
