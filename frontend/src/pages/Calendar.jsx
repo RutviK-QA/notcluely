@@ -17,7 +17,7 @@ const Calendar = ({ user, setUser }) => {
   const [bookings, setBookings] = useState([]);
   const [conflicts, setConflicts] = useState([]);
   const [view, setView] = useState('week'); // week or day
-  const [currentDate, setCurrentDate] = useState(DateTime.now().setZone(user.timezone));
+  const [currentDate, setCurrentDate] = useState(() => DateTime.now().setZone(user.timezone));
   const [showBookingDialog, setShowBookingDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showConflictsDialog, setShowConflictsDialog] = useState(false);
