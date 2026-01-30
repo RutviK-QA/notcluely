@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -8,28 +8,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { DateTime } from 'luxon';
-import { Clock, Settings, Calendar as CalendarIcon, AlertTriangle, Trash2, X } from 'lucide-react';
+import { Clock, Settings, Calendar as CalendarIcon, AlertTriangle, Trash2, LogOut } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const Calendar = ({ user, setUser }) => {
+const Calendar = ({ user, setUser, onLogout }) => {
   const [bookings, setBookings] = useState([]);
   const [conflicts, setConflicts] = useState([]);
-  const [view, setView] = useState('week'); // week or day
-  const [currentDate, setCurrentDate] = useState(null);
+  const [currentDate, setCurrentDate] = useState(DateTime.now().setZone(user.timezone));
   const [showBookingDialog, setShowBookingDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [showConflictsDialog, setShowConflictsDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [bookingToDelete, setBookingToDelete] = useState(null);
   const [timezones, setTimezones] = useState([]);
-  const socketRef = useRef(null);
-
-  // Initialize currentDate after component mounts
-  useEffect(() => {
-    setCurrentDate(DateTime.now().setZone(user.timezone));
-  }, [user.timezone]);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // Booking form state
   const [title, setTitle] = useState('');
@@ -37,31 +31,44 @@ const Calendar = ({ user, setUser }) => {
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
   const [notes, setNotes] = useState('');
-  const [selectedSlot, setSelectedSlot] = useState(null);
   const [potentialConflicts, setPotentialConflicts] = useState([]);
   const [showConflictWarning, setShowConflictWarning] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    fetchBookings();
-    fetchConflicts();
-    fetchTimezones();
+    // Initialize timezone and fetch data
+    const initialize = async () => {
+      try {
+        await Promise.all([
+          fetchBookings(),
+          fetchConflicts(),
+          fetchTimezones()
+        ]);
+        setIsInitialized(true);
+      } catch (error) {
+        console.error('Initialization error:', error);
+        toast.error('Failed to load calendar data');
+      }
+    };
 
-    // Polling for real-time updates every 10 seconds
+    initialize();
+
+    // Polling for updates every 10 seconds
     const interval = setInterval(() => {
       fetchBookings();
       fetchConflicts();
     }, 10000);
 
-    return () => {
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, []);
 
   const fetchBookings = async () => {
     try {
       const response = await fetch(`${API}/bookings`);
-      const data = await response.json();
-      setBookings(data);
+      if (response.ok) {
+        const data = await response.json();
+        setBookings(data);
+      }
     } catch (error) {
       console.error('Error fetching bookings:', error);
     }
@@ -70,8 +77,10 @@ const Calendar = ({ user, setUser }) => {
   const fetchConflicts = async () => {
     try {
       const response = await fetch(`${API}/conflicts`);
-      const data = await response.json();
-      setConflicts(data);
+      if (response.ok) {
+        const data = await response.json();
+        setConflicts(data);
+      }
     } catch (error) {
       console.error('Error fetching conflicts:', error);
     }
@@ -80,8 +89,10 @@ const Calendar = ({ user, setUser }) => {
   const fetchTimezones = async () => {
     try {
       const response = await fetch(`${API}/timezones`);
-      const data = await response.json();
-      setTimezones(data.timezones);
+      if (response.ok) {
+        const data = await response.json();
+        setTimezones(data.timezones);
+      }
     } catch (error) {
       console.error('Error fetching timezones:', error);
     }
@@ -96,7 +107,6 @@ const Calendar = ({ user, setUser }) => {
     setStartDate(date);
     setStartTime(startTimeStr);
     setEndTime(endTimeStr);
-    setSelectedSlot({ day, hour });
     setShowBookingDialog(true);
   };
 
@@ -123,6 +133,8 @@ const Calendar = ({ user, setUser }) => {
       return;
     }
 
+    if (isSubmitting) return;
+
     // Convert to UTC
     const startLocal = DateTime.fromISO(`${startDate}T${startTime}`, { zone: user.timezone });
     const endLocal = DateTime.fromISO(`${startDate}T${endTime}`, { zone: user.timezone });
@@ -144,6 +156,8 @@ const Calendar = ({ user, setUser }) => {
       return;
     }
 
+    setIsSubmitting(true);
+
     try {
       const response = await fetch(`${API}/bookings?user_id=${user.id}`, {
         method: 'POST',
@@ -154,7 +168,7 @@ const Calendar = ({ user, setUser }) => {
           title,
           start_time: startUtc,
           end_time: endUtc,
-          notes,
+          notes: notes || null,
           user_timezone: user.timezone,
         }),
       });
@@ -164,14 +178,17 @@ const Calendar = ({ user, setUser }) => {
         setShowBookingDialog(false);
         setShowConflictWarning(false);
         resetForm();
-        fetchBookings();
-        fetchConflicts();
+        await fetchBookings();
+        await fetchConflicts();
       } else {
-        toast.error('Failed to create booking');
+        const error = await response.json();
+        toast.error(error.detail || 'Failed to create booking');
       }
     } catch (error) {
       console.error('Error creating booking:', error);
       toast.error('An error occurred');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -187,8 +204,8 @@ const Calendar = ({ user, setUser }) => {
         toast.success('Booking deleted');
         setShowDeleteDialog(false);
         setBookingToDelete(null);
-        fetchBookings();
-        fetchConflicts();
+        await fetchBookings();
+        await fetchConflicts();
       } else {
         const error = await response.json();
         toast.error(error.detail || 'Failed to delete booking');
@@ -225,26 +242,17 @@ const Calendar = ({ user, setUser }) => {
     setStartTime('');
     setEndTime('');
     setNotes('');
-    setSelectedSlot(null);
     setPotentialConflicts([]);
   };
 
   const getWeekDays = () => {
-    try {
-      const date = currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone);
-      const startOfWeek = date.startOf('week');
-      const days = [];
-      for (let i = 0; i < 7; i++) {
-        const day = startOfWeek.plus({ days: i });
-        if (day && day.isValid) {
-          days.push(day);
-        }
-      }
-      return days.length === 7 ? days : [];
-    } catch (error) {
-      console.error('Error in getWeekDays:', error);
-      return [];
+    if (!currentDate || !currentDate.isValid) return [];
+    const startOfWeek = currentDate.startOf('week');
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      days.push(startOfWeek.plus({ days: i }));
     }
+    return days;
   };
 
   const getHours = () => {
@@ -277,9 +285,16 @@ const Calendar = ({ user, setUser }) => {
   };
 
   const userConflicts = getUserConflicts();
-  
-  // Ensure currentDate is always valid
-  const effectiveDate = currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone);
+  const weekDays = getWeekDays();
+  const hours = getHours();
+
+  if (!isInitialized || weekDays.length === 0) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-[#0a0a0a]">
+        <div className="text-white text-lg">Loading calendar...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white">
@@ -288,7 +303,10 @@ const Calendar = ({ user, setUser }) => {
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold" style={{ fontFamily: 'Manrope, sans-serif' }}>notcluely</h1>
-            <p className="text-sm text-gray-400">Welcome, {user.name} {user.is_admin && <span className="text-cyan-500">(Admin)</span>}</p>
+            <p className="text-sm text-gray-400">
+              Welcome, {user.name} 
+              {user.is_admin && <span className="ml-2 px-2 py-0.5 bg-cyan-600 text-white text-xs rounded font-semibold">ADMIN</span>}
+            </p>
           </div>
           
           <div className="flex items-center gap-4">
@@ -299,7 +317,7 @@ const Calendar = ({ user, setUser }) => {
               </div>
             </div>
             
-            {(getUserConflicts().length > 0 || (user.is_admin && conflicts.length > 0)) && (
+            {(userConflicts.length > 0 || (user.is_admin && conflicts.length > 0)) && (
               <Button
                 data-testid="conflicts-button"
                 onClick={() => setShowConflictsDialog(true)}
@@ -309,7 +327,7 @@ const Calendar = ({ user, setUser }) => {
                 <AlertTriangle className="w-4 h-4 mr-2" />
                 Conflicts
                 <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                  {user.is_admin ? conflicts.length : getUserConflicts().length}
+                  {user.is_admin ? conflicts.length : userConflicts.length}
                 </span>
               </Button>
             )}
@@ -322,6 +340,15 @@ const Calendar = ({ user, setUser }) => {
             >
               <Settings className="w-5 h-5" />
             </Button>
+
+            <Button
+              data-testid="logout-button"
+              onClick={onLogout}
+              variant="ghost"
+              className="text-gray-400 hover:text-red-500"
+            >
+              <LogOut className="w-5 h-5" />
+            </Button>
           </div>
         </div>
       </div>
@@ -330,7 +357,7 @@ const Calendar = ({ user, setUser }) => {
       <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button
-            onClick={() => setCurrentDate(effectiveDate.minus({ weeks: 1 }))}
+            onClick={() => setCurrentDate(currentDate.minus({ weeks: 1 }))}
             variant="outline"
             className="border-gray-700 text-white hover:bg-gray-800"
           >
@@ -344,14 +371,14 @@ const Calendar = ({ user, setUser }) => {
             Today
           </Button>
           <Button
-            onClick={() => setCurrentDate(effectiveDate.plus({ weeks: 1 }))}
+            onClick={() => setCurrentDate(currentDate.plus({ weeks: 1 }))}
             variant="outline"
             className="border-gray-700 text-white hover:bg-gray-800"
           >
             Next
           </Button>
           <span className="text-lg font-medium ml-4">
-            {effectiveDate.toFormat('MMMM yyyy')}
+            {currentDate.toFormat('MMMM yyyy')}
           </span>
         </div>
 
@@ -374,12 +401,11 @@ const Calendar = ({ user, setUser }) => {
           {/* Week Header */}
           <div className="grid grid-cols-8 border-b border-gray-800">
             <div className="p-3 border-r border-gray-800 bg-[#151515] text-sm text-gray-500">Time</div>
-            {getWeekDays().map((day, idx) => {
-              if (!day || !day.isValid) return null;
+            {weekDays.map((day, idx) => {
               const isToday = day.hasSame(DateTime.now().setZone(user.timezone), 'day');
               return (
                 <div
-                  key={`header-day-${idx}`}
+                  key={`header-${idx}`}
                   className="p-3 border-r border-gray-800 bg-[#151515] text-center"
                 >
                   <div className="text-sm text-gray-400">{day.toFormat('EEE')}</div>
@@ -393,81 +419,77 @@ const Calendar = ({ user, setUser }) => {
 
           {/* Time Slots */}
           <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 300px)' }}>
-            {getHours().map((hour) => {
-              const weekDays = getWeekDays().filter(d => d && d.isValid);
-              if (weekDays.length === 0) return null;
-              
-              return (
-                <div key={`hour-${hour}`} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
-                  <div className="p-3 border-r border-gray-800 text-sm text-gray-500 flex items-start">
-                    {DateTime.fromObject({ hour }).toFormat('ha')}
-                  </div>
-                  {weekDays.map((day, dayIdx) => {
-                    const slotBookings = getBookingsForSlot(day, hour);
-                    return (
-                      <div
-                        key={`slot-${hour}-${dayIdx}`}
-                        data-testid={`time-slot-${day.toFormat('yyyy-MM-dd')}-${hour}`}
-                        onClick={() => slotBookings.length === 0 && handleSlotClick(day, hour)}
-                        className={`p-2 border-r border-gray-800 min-h-[60px] relative ${
-                          slotBookings.length === 0 ? 'cursor-pointer hover:bg-[#1a1a1a]' : ''
-                        }`}
-                      >
-                        {slotBookings.map((booking, idx) => {
-                          const isConflict = hasConflict(booking);
-                          const isOwner = booking.user_id === user.id;
-                          return (
-                            <div
-                              key={`booking-${booking.id}-${idx}`}
-                              data-testid={`booking-${booking.id}`}
-                              className={`text-xs p-2 rounded mb-1 ${
-                                isConflict
-                                  ? 'bg-red-900/50 border border-red-500'
-                                  : 'bg-cyan-900/30 border border-cyan-700'
-                              } ${isOwner ? 'font-semibold' : ''}`}
-                              style={{ zIndex: 10 + idx }}
-                            >
-                              <div className="flex items-start justify-between gap-1">
-                                <div className="flex-1 min-w-0">
-                                  <div className="truncate font-medium">{booking.title}</div>
-                                  <div className="text-gray-400 truncate">{booking.user_name}</div>
-                                </div>
-                                {(isOwner || user.is_admin) && (
-                                  <button
-                                    data-testid={`delete-booking-${booking.id}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setBookingToDelete(booking);
-                                      setShowDeleteDialog(true);
-                                    }}
-                                    className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                )}
+            {hours.map((hour) => (
+              <div key={`hour-${hour}`} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
+                <div className="p-3 border-r border-gray-800 text-sm text-gray-500 flex items-start">
+                  {DateTime.fromObject({ hour }).toFormat('ha')}
+                </div>
+                {weekDays.map((day, dayIdx) => {
+                  const slotBookings = getBookingsForSlot(day, hour);
+                  return (
+                    <div
+                      key={`slot-${hour}-${dayIdx}`}
+                      data-testid={`time-slot-${day.toFormat('yyyy-MM-dd')}-${hour}`}
+                      onClick={() => slotBookings.length === 0 && handleSlotClick(day, hour)}
+                      className={`p-2 border-r border-gray-800 min-h-[60px] relative ${
+                        slotBookings.length === 0 ? 'cursor-pointer hover:bg-[#1a1a1a]' : ''
+                      }`}
+                    >
+                      {slotBookings.map((booking, idx) => {
+                        const isConflict = hasConflict(booking);
+                        const isOwner = booking.user_id === user.id;
+                        const canDelete = isOwner || user.is_admin;
+                        return (
+                          <div
+                            key={`booking-${booking.id}`}
+                            data-testid={`booking-${booking.id}`}
+                            className={`text-xs p-2 rounded mb-1 ${
+                              isConflict
+                                ? 'bg-red-900/50 border border-red-500'
+                                : 'bg-cyan-900/30 border border-cyan-700'
+                            } ${isOwner ? 'font-semibold' : ''}`}
+                            style={{ zIndex: 10 + idx }}
+                          >
+                            <div className="flex items-start justify-between gap-1">
+                              <div className="flex-1 min-w-0">
+                                <div className="truncate font-medium">{booking.title}</div>
+                                <div className="text-gray-400 truncate">{booking.user_name}</div>
                               </div>
-                              {isConflict && (
-                                <div className="flex items-center gap-1 mt-1 text-red-400">
-                                  <AlertTriangle className="w-3 h-3" />
-                                  <span className="text-[10px]">Conflict</span>
-                                </div>
+                              {canDelete && (
+                                <button
+                                  data-testid={`delete-booking-${booking.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setBookingToDelete(booking);
+                                    setShowDeleteDialog(true);
+                                  }}
+                                  className="flex-shrink-0 text-gray-400 hover:text-red-500 transition-colors"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
                               )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+                            {isConflict && (
+                              <div className="flex items-center gap-1 mt-1 text-red-400">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span className="text-[10px]">Conflict</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
       {/* Create Booking Dialog */}
       <Dialog open={showBookingDialog} onOpenChange={setShowBookingDialog}>
-        <DialogContent className="bg-[#151515] border-gray-800 text-white">
+        <DialogContent className="bg-[#151515] border-gray-800 text-white z-[1001]">
           <DialogHeader>
             <DialogTitle>Create Booking</DialogTitle>
             <DialogDescription className="text-gray-400">
@@ -500,7 +522,6 @@ const Calendar = ({ user, setUser }) => {
                   className="bg-[#0a0a0a] border-gray-700 text-white mt-1"
                 />
               </div>
-              <div></div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -544,9 +565,10 @@ const Calendar = ({ user, setUser }) => {
             <Button
               data-testid="submit-booking-button"
               onClick={() => handleCreateBooking(false)}
-              className="w-full bg-cyan-600 hover:bg-cyan-700"
+              disabled={isSubmitting}
+              className="w-full bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Create Booking
+              {isSubmitting ? 'Creating...' : 'Create Booking'}
             </Button>
           </div>
         </DialogContent>
@@ -554,7 +576,7 @@ const Calendar = ({ user, setUser }) => {
 
       {/* Conflict Warning Dialog */}
       <AlertDialog open={showConflictWarning} onOpenChange={setShowConflictWarning}>
-        <AlertDialogContent className="bg-[#151515] border-gray-800 text-white">
+        <AlertDialogContent className="bg-[#151515] border-gray-800 text-white z-[1001]">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-red-500">
               <AlertTriangle className="w-5 h-5" />
@@ -597,7 +619,7 @@ const Calendar = ({ user, setUser }) => {
 
       {/* Delete Booking Dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent className="bg-[#151515] border-gray-800 text-white">
+        <AlertDialogContent className="bg-[#151515] border-gray-800 text-white z-[1001]">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Booking?</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
@@ -620,7 +642,7 @@ const Calendar = ({ user, setUser }) => {
 
       {/* Settings Dialog */}
       <Dialog open={showSettingsDialog} onOpenChange={setShowSettingsDialog}>
-        <DialogContent className="bg-[#151515] border-gray-800 text-white">
+        <DialogContent className="bg-[#151515] border-gray-800 text-white z-[1001]">
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
           </DialogHeader>
@@ -641,7 +663,7 @@ const Calendar = ({ user, setUser }) => {
                 <SelectTrigger id="timezone-setting" className="bg-[#0a0a0a] border-gray-700 text-white mt-1">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-[#151515] border-gray-700 text-white max-h-[300px]">
+                <SelectContent className="bg-[#151515] border-gray-700 text-white max-h-[300px] z-[1002]">
                   {timezones.map((tz) => (
                     <SelectItem key={tz} value={tz} className="text-white hover:bg-[#0a0a0a] focus:bg-[#0a0a0a]">
                       {tz}
@@ -656,7 +678,7 @@ const Calendar = ({ user, setUser }) => {
 
       {/* Conflicts Dialog */}
       <Dialog open={showConflictsDialog} onOpenChange={setShowConflictsDialog}>
-        <DialogContent className="bg-[#151515] border-gray-800 text-white max-w-2xl">
+        <DialogContent className="bg-[#151515] border-gray-800 text-white max-w-2xl z-[1001]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-500" />
@@ -668,10 +690,10 @@ const Calendar = ({ user, setUser }) => {
           </DialogHeader>
 
           <div className="space-y-3 mt-4 max-h-[400px] overflow-y-auto">
-            {(user.is_admin ? conflicts : getUserConflicts()).length === 0 ? (
+            {(user.is_admin ? conflicts : userConflicts).length === 0 ? (
               <p className="text-gray-500 text-center py-8">No active conflicts</p>
             ) : (
-              (user.is_admin ? conflicts : getUserConflicts()).map((conflict) => {
+              (user.is_admin ? conflicts : userConflicts).map((conflict) => {
                 const startLocal = DateTime.fromISO(conflict.conflict_start, { zone: 'utc' }).setZone(user.timezone);
                 const endLocal = DateTime.fromISO(conflict.conflict_end, { zone: 'utc' }).setZone(user.timezone);
                 
