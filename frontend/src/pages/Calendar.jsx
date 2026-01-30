@@ -290,7 +290,7 @@ const Calendar = ({ user, setUser }) => {
               </div>
             </div>
             
-            {(userConflicts.length > 0 || (user.is_admin && conflicts.length > 0)) && (
+            {(getUserConflicts().length > 0 || (user.is_admin && conflicts.length > 0)) && (
               <Button
                 data-testid="conflicts-button"
                 onClick={() => setShowConflictsDialog(true)}
