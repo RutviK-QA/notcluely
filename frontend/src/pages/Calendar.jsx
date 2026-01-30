@@ -14,7 +14,7 @@ import { Clock, Settings, Calendar as CalendarIcon, AlertTriangle, Trash2, LogOu
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const Calendar = ({ user, setUser, onLogout }) => {
+const Calendar = ({ user, setUser, onLogout, token }) => {
   const [bookings, setBookings] = useState([]);
   const [conflicts, setConflicts] = useState([]);
   const [currentDate, setCurrentDate] = useState(() => {
