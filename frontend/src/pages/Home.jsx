@@ -58,6 +58,11 @@ const Home = ({ fingerprint, setUser }) => {
       return;
     }
 
+    if (!timezone || timezone === '') {
+      toast.error('Please select a timezone');
+      return;
+    }
+
     setLoading(true);
 
     try {
