@@ -222,8 +222,11 @@ const Calendar = ({ user, setUser, onLogout, token }) => {
     if (!bookingToDelete) return;
 
     try {
-      const response = await fetch(`${API}/bookings/${bookingToDelete.id}?user_id=${user.id}`, {
+      const response = await fetch(`${API}/bookings/${bookingToDelete.id}`, {
         method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       if (response.ok) {
