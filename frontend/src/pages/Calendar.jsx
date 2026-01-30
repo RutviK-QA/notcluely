@@ -386,7 +386,9 @@ const Calendar = ({ user, setUser }) => {
           {/* Time Slots */}
           <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 300px)' }}>
             {getHours().map((hour) => {
-              const weekDays = getWeekDays();
+              const weekDays = getWeekDays().filter(d => d && d.isValid);
+              if (weekDays.length === 0) return null;
+              
               return (
                 <div key={`hour-${hour}`} className="grid grid-cols-8 border-b border-gray-800 hover:bg-[#151515]">
                   <div className="p-3 border-r border-gray-800 text-sm text-gray-500 flex items-start">
