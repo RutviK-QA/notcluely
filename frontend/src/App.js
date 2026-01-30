@@ -38,6 +38,12 @@ function App() {
     initFingerprint();
   }, []);
 
+  const handleLogout = () => {
+    setUser(null);
+    // Note: In production, you'd want to clear the fingerprint from server
+    // For now, we just clear the local state
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#0a0a0a]">
@@ -51,7 +57,16 @@ function App() {
       <Toaster position="top-right" richColors />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={user ? <Calendar user={user} setUser={setUser} /> : <Home fingerprint={fingerprint} setUser={setUser} />} />
+          <Route 
+            path="/" 
+            element={
+              user ? (
+                <Calendar user={user} setUser={setUser} onLogout={handleLogout} />
+              ) : (
+                <Home fingerprint={fingerprint} setUser={setUser} />
+              )
+            } 
+          />
         </Routes>
       </BrowserRouter>
     </div>
