@@ -247,8 +247,11 @@ const Calendar = ({ user, setUser, onLogout, token }) => {
 
   const handleUpdateTimezone = async (newTimezone) => {
     try {
-      const response = await fetch(`${API}/users/${user.id}/timezone?timezone=${encodeURIComponent(newTimezone)}`, {
+      const response = await fetch(`${API}/users/timezone?timezone=${encodeURIComponent(newTimezone)}`, {
         method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       if (response.ok) {
