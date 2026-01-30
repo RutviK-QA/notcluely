@@ -658,7 +658,7 @@ const Calendar = ({ user, setUser }) => {
           </DialogHeader>
 
           <div className="space-y-3 mt-4 max-h-[400px] overflow-y-auto">
-            {(user.is_admin ? conflicts : userConflicts).length === 0 ? (
+            {(user.is_admin ? conflicts : getUserConflicts()).length === 0 ? (
               <p className="text-gray-500 text-center py-8">No active conflicts</p>
             ) : (
               (user.is_admin ? conflicts : userConflicts).map((conflict) => {
