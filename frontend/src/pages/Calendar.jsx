@@ -256,13 +256,30 @@ const Calendar = ({ user, setUser, onLogout }) => {
   };
 
   const getWeekDays = () => {
-    if (!currentDate || !currentDate.isValid) return [];
-    const startOfWeek = currentDate.startOf('week');
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      days.push(startOfWeek.plus({ days: i }));
+    try {
+      // Ensure we always have a valid DateTime object
+      let baseDate = currentDate;
+      if (!baseDate || !baseDate.isValid) {
+        baseDate = DateTime.now().setZone(user.timezone);
+      }
+      
+      const startOfWeek = baseDate.startOf('week');
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        days.push(startOfWeek.plus({ days: i }));
+      }
+      return days;
+    } catch (error) {
+      console.error('Error in getWeekDays:', error);
+      // Fallback to current week
+      const today = DateTime.now().setZone(user.timezone);
+      const startOfWeek = today.startOf('week');
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        days.push(startOfWeek.plus({ days: i }));
+      }
+      return days;
     }
-    return days;
   };
 
   const getHours = () => {
