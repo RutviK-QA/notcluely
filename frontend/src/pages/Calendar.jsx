@@ -440,9 +440,6 @@ const Calendar = ({ user, setUser }) => {
                     </div>
                   );
                 })}
-                    </div>
-                  );
-                })}
               </div>
             ))}
           </div>
