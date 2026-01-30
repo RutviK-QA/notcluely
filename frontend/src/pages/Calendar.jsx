@@ -405,7 +405,7 @@ const Calendar = ({ user, setUser, onLogout }) => {
             Next
           </Button>
           <span className="text-lg font-medium ml-4">
-            {currentDate.toFormat('MMMM yyyy')}
+            {(currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone)).toFormat('MMMM yyyy')}
           </span>
         </div>
 
