@@ -298,7 +298,7 @@ const Calendar = ({ user, setUser, onLogout }) => {
   const weekDays = getWeekDays();
   const hours = getHours();
 
-  if (!isInitialized || weekDays.length === 0) {
+  if (!isInitialized) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#0a0a0a]">
         <div className="text-white text-lg">Loading calendar...</div>
