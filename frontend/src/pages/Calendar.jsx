@@ -277,6 +277,9 @@ const Calendar = ({ user, setUser }) => {
   };
 
   const userConflicts = getUserConflicts();
+  
+  // Ensure currentDate is always valid
+  const effectiveDate = currentDate && currentDate.isValid ? currentDate : DateTime.now().setZone(user.timezone);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white">
