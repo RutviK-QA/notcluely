@@ -2,7 +2,6 @@ from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisco
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
@@ -13,14 +12,82 @@ from datetime import datetime, timezone, timedelta
 import pytz
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+import sqlite3
+import json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# SQLite connection
+DB_PATH = os.environ.get('DATABASE_URL', 'notcluely.db')
+if DB_PATH.startswith('sqlite:///'):
+    DB_PATH = DB_PATH.replace('sqlite:///', '')
+
+def get_db():
+    """Get database connection"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initialize database with tables"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            timezone TEXT NOT NULL DEFAULT 'UTC',
+            is_admin BOOLEAN NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    ''')
+    
+    # Bookings table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bookings (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            user_name TEXT NOT NULL,
+            title TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            notes TEXT,
+            user_timezone TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Conflicts table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS conflicts (
+            id TEXT PRIMARY KEY,
+            booking1_id TEXT NOT NULL,
+            booking2_id TEXT NOT NULL,
+            user1_id TEXT NOT NULL,
+            user2_id TEXT NOT NULL,
+            user1_name TEXT NOT NULL,
+            user2_name TEXT NOT NULL,
+            conflict_start TEXT NOT NULL,
+            conflict_end TEXT NOT NULL,
+            resolved BOOLEAN NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (booking1_id) REFERENCES bookings (id),
+            FOREIGN KEY (booking2_id) REFERENCES bookings (id),
+            FOREIGN KEY (user1_id) REFERENCES users (id),
+            FOREIGN KEY (user2_id) REFERENCES users (id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# Initialize database on startup
+init_db()
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -53,7 +120,7 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Your session expired. Please log in again.",
@@ -68,10 +135,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except JWTError:
         raise credentials_exception
     
-    user = await db.users.find_one({"id": user_id}, {"_id": 0})
-    if user is None:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+    user_row = cursor.fetchone()
+    conn.close()
+    
+    if user_row is None:
         raise credentials_exception
     
+    user = dict(user_row)
+    user['is_admin'] = bool(user['is_admin'])
     # Convert ISO string timestamps back to datetime
     if isinstance(user.get('created_at'), str):
         user['created_at'] = datetime.fromisoformat(user['created_at'])
@@ -167,8 +241,13 @@ async def register(user_data: UserRegister):
         )
     
     # Check if username already exists (case-insensitive)
-    existing = await db.users.find_one({"username": username})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
+    existing = cursor.fetchone()
+    
     if existing:
+        conn.close()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already taken"
@@ -178,27 +257,27 @@ async def register(user_data: UserRegister):
     is_admin = username == "rutvik"
     
     # Create user
-    user = User(
-        username=username,
-        password_hash=get_password_hash(user_data.password),
-        timezone=user_data.timezone,
-        is_admin=is_admin
-    )
+    user_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    password_hash = get_password_hash(user_data.password)
     
-    doc = user.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
+    cursor.execute('''
+        INSERT INTO users (id, username, password_hash, timezone, is_admin, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, username, password_hash, user_data.timezone, is_admin, created_at))
     
-    await db.users.insert_one(doc)
+    conn.commit()
+    conn.close()
     
     # Create access token
-    access_token = create_access_token(data={"sub": user.id})
+    access_token = create_access_token(data={"sub": user_id})
     
     user_response = UserResponse(
-        id=user.id,
-        username=user.username,
-        timezone=user.timezone,
-        is_admin=user.is_admin,
-        created_at=user.created_at
+        id=user_id,
+        username=username,
+        timezone=user_data.timezone,
+        is_admin=is_admin,
+        created_at=datetime.fromisoformat(created_at)
     )
     
     return TokenResponse(access_token=access_token, user=user_response)
@@ -207,13 +286,20 @@ async def register(user_data: UserRegister):
 async def login(user_data: UserLogin):
     # Find user (case-insensitive username)
     username = user_data.username.strip().lower()
-    user = await db.users.find_one({"username": username}, {"_id": 0})
     
-    if not user:
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+    user_row = cursor.fetchone()
+    conn.close()
+    
+    if not user_row:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
         )
+    
+    user = dict(user_row)
     
     # Verify password
     if not verify_password(user_data.password, user['password_hash']):
@@ -225,10 +311,11 @@ async def login(user_data: UserLogin):
     # Update admin status on every login (in case username changes)
     is_admin = username == "rutvik"
     if user.get('is_admin') != is_admin:
-        await db.users.update_one(
-            {"id": user['id']},
-            {"$set": {"is_admin": is_admin}}
-        )
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET is_admin = ? WHERE id = ?', (is_admin, user['id']))
+        conn.commit()
+        conn.close()
         user['is_admin'] = is_admin
     
     # Create access token
@@ -237,6 +324,8 @@ async def login(user_data: UserLogin):
     # Convert ISO string timestamps
     if isinstance(user.get('created_at'), str):
         user['created_at'] = datetime.fromisoformat(user['created_at'])
+    
+    user['is_admin'] = bool(user['is_admin'])
     
     user_response = UserResponse(
         id=user['id'],
@@ -266,22 +355,30 @@ async def logout():
 # User routes
 @api_router.put("/users/timezone")
 async def update_user_timezone(timezone: str, current_user: dict = Depends(get_current_user)):
-    result = await db.users.update_one(
-        {"id": current_user['id']},
-        {"$set": {"timezone": timezone}}
-    )
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET timezone = ? WHERE id = ?', (timezone, current_user['id']))
+    conn.commit()
     
-    if result.matched_count == 0:
+    if cursor.rowcount == 0:
+        conn.close()
         raise HTTPException(status_code=404, detail="User not found")
     
+    conn.close()
     return {"success": True}
 
 @api_router.get("/users", response_model=List[UserResponse])
 async def get_all_users(current_user: dict = Depends(get_current_user)):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, username, timezone, is_admin, created_at FROM users')
+    users_rows = cursor.fetchall()
+    conn.close()
     
     result = []
-    for user in users:
+    for user_row in users_rows:
+        user = dict(user_row)
+        user['is_admin'] = bool(user['is_admin'])
         if isinstance(user['created_at'], str):
             user['created_at'] = datetime.fromisoformat(user['created_at'])
         result.append(UserResponse(**user))
@@ -295,7 +392,10 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
     start_dt = datetime.fromisoformat(booking_data.start_time.replace('Z', '+00:00'))
     end_dt = datetime.fromisoformat(booking_data.end_time.replace('Z', '+00:00'))
     
-    existing_bookings = await db.bookings.find({}, {"_id": 0}).to_list(1000)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM bookings')
+    existing_bookings = [dict(row) for row in cursor.fetchall()]
     
     conflicts = []
     for existing in existing_bookings:
@@ -306,114 +406,172 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
         if (start_dt < existing_end and end_dt > existing_start):
             conflicts.append(existing)
     
-    booking = Booking(
+    # Create booking
+    booking_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    
+    cursor.execute('''
+        INSERT INTO bookings (id, user_id, user_name, title, start_time, end_time, notes, user_timezone, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        booking_id, current_user['id'], current_user['username'], 
+        booking_data.title, booking_data.start_time, booking_data.end_time, 
+        booking_data.notes, booking_data.user_timezone, created_at
+    ))
+    
+    conn.commit()
+    
+    # Create conflict notifications if there are conflicts
+    for conflict in conflicts:
+        conflict_id = str(uuid.uuid4())
+        conflict_notif_created_at = datetime.now(timezone.utc).isoformat()
+        
+        cursor.execute('''
+            INSERT INTO conflicts (id, booking1_id, booking2_id, user1_id, user2_id, user1_name, user2_name, conflict_start, conflict_end, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            conflict_id, conflict['id'], booking_id, conflict['user_id'], current_user['id'],
+            conflict['user_name'], current_user['username'],
+            max(booking_data.start_time, conflict['start_time']),
+            min(booking_data.end_time, conflict['end_time']),
+            conflict_notif_created_at
+        ))
+    
+    conn.commit()
+    conn.close()
+    
+    return Booking(
+        id=booking_id,
         user_id=current_user['id'],
         user_name=current_user['username'],
         title=booking_data.title,
         start_time=booking_data.start_time,
         end_time=booking_data.end_time,
         notes=booking_data.notes,
-        user_timezone=booking_data.user_timezone
+        user_timezone=booking_data.user_timezone,
+        created_at=datetime.fromisoformat(created_at)
     )
-    
-    doc = booking.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.bookings.insert_one(doc)
-    
-    # Create conflict notifications if there are conflicts
-    for conflict in conflicts:
-        conflict_notif = ConflictNotification(
-            booking1_id=conflict['id'],
-            booking2_id=booking.id,
-            user1_id=conflict['user_id'],
-            user2_id=current_user['id'],
-            user1_name=conflict['user_name'],
-            user2_name=current_user['username'],
-            conflict_start=max(booking_data.start_time, conflict['start_time']),
-            conflict_end=min(booking_data.end_time, conflict['end_time'])
-        )
-        
-        conflict_doc = conflict_notif.model_dump()
-        conflict_doc['created_at'] = conflict_doc['created_at'].isoformat()
-        
-        await db.conflicts.insert_one(conflict_doc)
-    
-    return booking
 
 @api_router.get("/bookings", response_model=List[Booking])
 async def get_bookings(current_user: dict = Depends(get_current_user)):
-    bookings = await db.bookings.find({}, {"_id": 0}).to_list(1000)
+    conn = get_db()
+    cursor = conn.cursor()
     
-    for booking in bookings:
+    # If admin, return all bookings. Otherwise, return only their own.
+    if current_user.get('is_admin', False):
+        cursor.execute('SELECT * FROM bookings')
+    else:
+        cursor.execute('SELECT * FROM bookings WHERE user_id = ?', (current_user['id'],))
+    
+    bookings_rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for booking_row in bookings_rows:
+        booking = dict(booking_row)
         if isinstance(booking['created_at'], str):
             booking['created_at'] = datetime.fromisoformat(booking['created_at'])
+        result.append(Booking(**booking))
     
-    return bookings
+    return result
 
 @api_router.delete("/bookings/{booking_id}")
 async def delete_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_db()
+    cursor = conn.cursor()
+    
     # Get booking
-    booking = await db.bookings.find_one({"id": booking_id}, {"_id": 0})
-    if not booking:
+    cursor.execute('SELECT * FROM bookings WHERE id = ?', (booking_id,))
+    booking_row = cursor.fetchone()
+    
+    if not booking_row:
+        conn.close()
         raise HTTPException(status_code=404, detail="Booking not found")
+    
+    booking = dict(booking_row)
     
     # Check if user owns the booking or is admin
     if booking['user_id'] != current_user['id'] and not current_user.get('is_admin', False):
+        conn.close()
         raise HTTPException(
             status_code=403, 
             detail="You do not have permission to delete this booking"
         )
     
-    await db.bookings.delete_one({"id": booking_id})
+    cursor.execute('DELETE FROM bookings WHERE id = ?', (booking_id,))
     
     # Delete related conflicts
-    await db.conflicts.delete_many({
-        "$or": [
-            {"booking1_id": booking_id},
-            {"booking2_id": booking_id}
-        ]
-    })
+    cursor.execute('''
+        DELETE FROM conflicts 
+        WHERE booking1_id = ? OR booking2_id = ?
+    ''', (booking_id, booking_id))
+    
+    conn.commit()
+    conn.close()
     
     return {"success": True}
 
 # Conflict routes
 @api_router.get("/conflicts", response_model=List[ConflictNotification])
 async def get_conflicts(current_user: dict = Depends(get_current_user)):
-    conflicts = await db.conflicts.find({"resolved": False}, {"_id": 0}).to_list(1000)
+    conn = get_db()
+    cursor = conn.cursor()
     
-    for conflict in conflicts:
+    if current_user.get('is_admin', False):
+        cursor.execute('SELECT * FROM conflicts WHERE resolved = 0')
+    else:
+        cursor.execute('''
+            SELECT * FROM conflicts 
+            WHERE resolved = 0 AND (user1_id = ? OR user2_id = ?)
+        ''', (current_user['id'], current_user['id']))
+    
+    conflicts_rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for conflict_row in conflicts_rows:
+        conflict = dict(conflict_row)
+        conflict['resolved'] = bool(conflict['resolved'])
         if isinstance(conflict['created_at'], str):
             conflict['created_at'] = datetime.fromisoformat(conflict['created_at'])
+        result.append(ConflictNotification(**conflict))
     
-    return conflicts
+    return result
 
 @api_router.get("/conflicts/user", response_model=List[ConflictNotification])
 async def get_user_conflicts(current_user: dict = Depends(get_current_user)):
-    conflicts = await db.conflicts.find({
-        "$or": [
-            {"user1_id": current_user['id']},
-            {"user2_id": current_user['id']}
-        ],
-        "resolved": False
-    }, {"_id": 0}).to_list(1000)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM conflicts
+        WHERE (user1_id = ? OR user2_id = ?) AND resolved = 0
+    ''', (current_user['id'], current_user['id']))
     
-    for conflict in conflicts:
+    conflicts_rows = cursor.fetchall()
+    conn.close()
+    
+    result = []
+    for conflict_row in conflicts_rows:
+        conflict = dict(conflict_row)
+        conflict['resolved'] = bool(conflict['resolved'])
         if isinstance(conflict['created_at'], str):
             conflict['created_at'] = datetime.fromisoformat(conflict['created_at'])
+        result.append(ConflictNotification(**conflict))
     
-    return conflicts
+    return result
 
 @api_router.put("/conflicts/{conflict_id}/resolve")
 async def resolve_conflict(conflict_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.conflicts.update_one(
-        {"id": conflict_id},
-        {"$set": {"resolved": True}}
-    )
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE conflicts SET resolved = 1 WHERE id = ?', (conflict_id,))
+    conn.commit()
     
-    if result.matched_count == 0:
+    if cursor.rowcount == 0:
+        conn.close()
         raise HTTPException(status_code=404, detail="Conflict not found")
     
+    conn.close()
     return {"success": True}
 
 # Timezone utility endpoint
@@ -438,7 +596,3 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
