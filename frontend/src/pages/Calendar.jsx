@@ -359,17 +359,21 @@ const Calendar = ({ user, setUser }) => {
           {/* Week Header */}
           <div className="grid grid-cols-8 border-b border-gray-800">
             <div className="p-3 border-r border-gray-800 bg-[#151515] text-sm text-gray-500">Time</div>
-            {weekDays.map((day) => (
-              <div
-                key={day.toISODate()}
-                className="p-3 border-r border-gray-800 bg-[#151515] text-center"
-              >
-                <div className="text-sm text-gray-400">{day.toFormat('EEE')}</div>
-                <div className={`text-lg font-semibold ${day.hasSame(DateTime.now().setZone(user.timezone), 'day') ? 'text-cyan-500' : 'text-white'}`}>
-                  {day.toFormat('d')}
+            {weekDays.map((day, idx) => {
+              const dayDate = day.toISO();
+              const isToday = day.hasSame(DateTime.now().setZone(user.timezone), 'day');
+              return (
+                <div
+                  key={`header-${dayDate}-${idx}`}
+                  className="p-3 border-r border-gray-800 bg-[#151515] text-center"
+                >
+                  <div className="text-sm text-gray-400">{day.toFormat('EEE')}</div>
+                  <div className={`text-lg font-semibold ${isToday ? 'text-cyan-500' : 'text-white'}`}>
+                    {day.toFormat('d')}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Time Slots */}
