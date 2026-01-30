@@ -367,6 +367,7 @@ const Calendar = ({ user, setUser }) => {
           <div className="grid grid-cols-8 border-b border-gray-800">
             <div className="p-3 border-r border-gray-800 bg-[#151515] text-sm text-gray-500">Time</div>
             {getWeekDays().map((day, idx) => {
+              if (!day || !day.isValid) return null;
               const isToday = day.hasSame(DateTime.now().setZone(user.timezone), 'day');
               return (
                 <div
