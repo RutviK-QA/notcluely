@@ -300,10 +300,23 @@ const Calendar = ({ user, setUser, onLogout }) => {
   };
 
   const userConflicts = getUserConflicts();
-  const weekDays = getWeekDays();
+
+  // Compute these during render
+  const weekDays = React.useMemo(() => {
+    if (!currentDate || !currentDate.isValid) {
+      return [];
+    }
+    const startOfWeek = currentDate.startOf('week');
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      days.push(startOfWeek.plus({ days: i }));
+    }
+    return days;
+  }, [currentDate]);
+
   const hours = getHours();
 
-  if (!isInitialized) {
+  if (!isInitialized || weekDays.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[#0a0a0a]">
         <div className="text-white text-lg">Loading calendar...</div>
