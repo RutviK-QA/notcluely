@@ -23,6 +23,22 @@ const Register = ({ onRegister }) => {
   });
   const [timezones, setTimezones] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [passwordFeedback, setPasswordFeedback] = useState({
+    hasUpper: false,
+    hasLower: false,
+    hasDigit: false,
+    hasLength: false,
+  });
+
+  // Check password complexity
+  const checkPasswordComplexity = (pwd) => {
+    setPasswordFeedback({
+      hasUpper: /[A-Z]/.test(pwd),
+      hasLower: /[a-z]/.test(pwd),
+      hasDigit: /\d/.test(pwd),
+      hasLength: pwd.length >= 8,
+    });
+  };
 
   useEffect(() => {
     // Fetch available timezones
@@ -56,6 +72,12 @@ const Register = ({ onRegister }) => {
       return;
     }
 
+    // Validate username characters
+    if (!/^[a-zA-Z0-9_]+$/.test(username.trim())) {
+      toast.error('Username can only contain letters, numbers, and underscores');
+      return;
+    }
+
     if (!password) {
       toast.error('Please enter a password');
       return;
@@ -63,6 +85,16 @@ const Register = ({ onRegister }) => {
 
     if (password.length < 8) {
       toast.error('Password must be at least 8 characters');
+      return;
+    }
+
+    // Check password complexity
+    const hasUpper = /[A-Z]/.test(password);
+    const hasLower = /[a-z]/.test(password);
+    const hasDigit = /\d/.test(password);
+
+    if (!hasUpper || !hasLower || !hasDigit) {
+      toast.error('Password must contain uppercase, lowercase, and digits');
       return;
     }
 
@@ -141,11 +173,30 @@ const Register = ({ onRegister }) => {
                 data-testid="register-password-input"
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  checkPasswordComplexity(e.target.value);
+                }}
                 placeholder="Choose a password (min 8 chars)"
                 className="bg-[#0a0a0a] border-gray-700 text-white placeholder:text-gray-500 focus:border-cyan-500 focus:ring-cyan-500"
                 autoComplete="new-password"
               />
+              {password && (
+                <div className="mt-2 text-xs space-y-1">
+                  <p className={passwordFeedback.hasLength ? 'text-green-500' : 'text-gray-500'}>
+                    ✓ At least 8 characters {passwordFeedback.hasLength ? '✔' : ''}
+                  </p>
+                  <p className={passwordFeedback.hasUpper ? 'text-green-500' : 'text-gray-500'}>
+                    ✓ Uppercase letter {passwordFeedback.hasUpper ? '✔' : ''}
+                  </p>
+                  <p className={passwordFeedback.hasLower ? 'text-green-500' : 'text-gray-500'}>
+                    ✓ Lowercase letter {passwordFeedback.hasLower ? '✔' : ''}
+                  </p>
+                  <p className={passwordFeedback.hasDigit ? 'text-green-500' : 'text-gray-500'}>
+                    ✓ Number (0-9) {passwordFeedback.hasDigit ? '✔' : ''}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div>

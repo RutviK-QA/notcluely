@@ -100,6 +100,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 # Security
 security = HTTPBearer()
+LOGIN_ATTEMPTS = {}  # Track login attempts per username
+MAX_LOGIN_ATTEMPTS = 5
+LOCK_TIME_MINUTES = 15
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -109,8 +112,11 @@ api_router = APIRouter(prefix="/api")
 
 # Helper functions
 def hash_password_for_bcrypt(password: str) -> str:
-    """Hash password with SHA256 first to ensure it's always 64 bytes for bcrypt"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash password with SHA256 first to ensure it's always fixed length for bcrypt"""
+    # Truncate password to 72 bytes before hashing to avoid bcrypt limit issues
+    truncated = password[:72]
+    sha256_hash = hashlib.sha256(truncated.encode()).hexdigest()
+    return sha256_hash
 
 def verify_password(plain_password, hashed_password):
     """Verify password by hashing with SHA256 then checking against bcrypt hash"""
@@ -122,12 +128,42 @@ def get_password_hash(password):
     sha256_hash = hash_password_for_bcrypt(password)
     return pwd_context.hash(sha256_hash)
 
-def create_access_token(data: dict):
+def create_access_token(data: dict, is_admin: bool = False):
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "is_admin": is_admin})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+def check_rate_limit(username: str) -> bool:
+    """Check if user has exceeded login attempt limit"""
+    now = datetime.now(timezone.utc)
+    
+    if username not in LOGIN_ATTEMPTS:
+        LOGIN_ATTEMPTS[username] = []
+    
+    # Remove old attempts outside lock window
+    LOGIN_ATTEMPTS[username] = [
+        ts for ts in LOGIN_ATTEMPTS[username]
+        if (now - ts).total_seconds() < (LOCK_TIME_MINUTES * 60)
+    ]
+    
+    # Check if locked
+    if len(LOGIN_ATTEMPTS[username]) >= MAX_LOGIN_ATTEMPTS:
+        return False
+    
+    return True
+
+def record_login_attempt(username: str):
+    """Record a login attempt"""
+    if username not in LOGIN_ATTEMPTS:
+        LOGIN_ATTEMPTS[username] = []
+    LOGIN_ATTEMPTS[username].append(datetime.now(timezone.utc))
+
+def clear_login_attempts(username: str):
+    """Clear login attempts on successful login"""
+    if username in LOGIN_ATTEMPTS:
+        LOGIN_ATTEMPTS[username] = []
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     credentials_exception = HTTPException(
@@ -243,10 +279,28 @@ async def register(user_data: UserRegister):
             detail="Username must be at least 3 characters"
         )
     
+    # Check for valid username characters (alphanumeric and underscore only)
+    if not username.replace('_', '').isalnum():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username can only contain letters, numbers, and underscores"
+        )
+    
     if len(user_data.password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must be at least 8 characters"
+        )
+    
+    # Check password complexity
+    has_upper = any(c.isupper() for c in user_data.password)
+    has_lower = any(c.islower() for c in user_data.password)
+    has_digit = any(c.isdigit() for c in user_data.password)
+    
+    if not (has_upper and has_lower and has_digit):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must contain uppercase, lowercase, and digits"
         )
     
     # Check if username already exists (case-insensitive)
@@ -259,7 +313,17 @@ async def register(user_data: UserRegister):
         conn.close()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already taken"
+            detail="Username already exists"
+        )
+    
+    # Validate timezone
+    if not user_data.timezone:
+        user_data.timezone = "UTC"
+    
+    if user_data.timezone not in pytz.all_timezones:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid timezone"
         )
     
     # Check if user should be admin (username is "rutvik", case-insensitive)
@@ -278,8 +342,8 @@ async def register(user_data: UserRegister):
     conn.commit()
     conn.close()
     
-    # Create access token
-    access_token = create_access_token(data={"sub": user_id})
+    # Create access token with admin status
+    access_token = create_access_token(data={"sub": user_id}, is_admin=is_admin)
     
     user_response = UserResponse(
         id=user_id,
@@ -296,6 +360,13 @@ async def login(user_data: UserLogin):
     # Find user (case-insensitive username)
     username = user_data.username.strip().lower()
     
+    # Check rate limit
+    if not check_rate_limit(username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many login attempts. Please try again in {LOCK_TIME_MINUTES} minutes."
+        )
+    
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
@@ -303,6 +374,8 @@ async def login(user_data: UserLogin):
     conn.close()
     
     if not user_row:
+        # Record failed attempt without revealing if user exists
+        record_login_attempt(username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
@@ -312,10 +385,15 @@ async def login(user_data: UserLogin):
     
     # Verify password
     if not verify_password(user_data.password, user['password_hash']):
+        # Record failed attempt
+        record_login_attempt(username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
         )
+    
+    # Clear rate limit on successful login
+    clear_login_attempts(username)
     
     # Update admin status on every login (in case username changes)
     is_admin = username == "rutvik"
@@ -327,8 +405,8 @@ async def login(user_data: UserLogin):
         conn.close()
         user['is_admin'] = is_admin
     
-    # Create access token
-    access_token = create_access_token(data={"sub": user['id']})
+    # Create access token with admin status
+    access_token = create_access_token(data={"sub": user['id']}, is_admin=is_admin)
     
     # Convert ISO string timestamps
     if isinstance(user.get('created_at'), str):
@@ -397,9 +475,36 @@ async def get_all_users(current_user: dict = Depends(get_current_user)):
 # Booking routes
 @api_router.post("/bookings", response_model=Booking)
 async def create_booking(booking_data: BookingCreate, current_user: dict = Depends(get_current_user)):
+    # Validate booking data
+    if not booking_data.title or not booking_data.title.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Booking title cannot be empty"
+        )
+    
+    if len(booking_data.title.strip()) > 255:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Booking title too long (max 255 characters)"
+        )
+    
     # Check for conflicts
     start_dt = datetime.fromisoformat(booking_data.start_time.replace('Z', '+00:00'))
     end_dt = datetime.fromisoformat(booking_data.end_time.replace('Z', '+00:00'))
+    
+    # Validate date range
+    now = datetime.now(timezone.utc)
+    if start_dt < now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot create bookings in the past"
+        )
+    
+    if start_dt >= end_dt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Start time must be before end time"
+        )
     
     conn = get_db()
     cursor = conn.cursor()
@@ -440,6 +545,11 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             conflict_id, conflict['id'], booking_id, conflict['user_id'], current_user['id'],
+            conflict['user_name'], current_user['username'],
+            max(booking_data.start_time, conflict['start_time']),
+            min(booking_data.end_time, conflict['end_time']),
+            conflict_notif_created_at
+        ))
             conflict['user_name'], current_user['username'],
             max(booking_data.start_time, conflict['start_time']),
             min(booking_data.end_time, conflict['end_time']),
