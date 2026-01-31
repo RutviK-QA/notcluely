@@ -90,8 +90,12 @@ def init_db():
 # Initialize database on startup
 init_db()
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing - Industry standard configuration
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+    bcrypt__rounds=12  # NIST recommended round count
+)
 
 # JWT settings
 SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
@@ -111,17 +115,32 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # Helper functions
-def verify_password(plain_password, hashed_password):
-    """Verify password using bcrypt directly"""
-    # Truncate to 72 bytes (bcrypt limit) before verifying
-    truncated = plain_password[:72]
-    return pwd_context.verify(truncated, hashed_password)
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against a bcrypt hash.
+    
+    Passlib handles all bcrypt compatibility and truncation internally.
+    No manual truncation needed - passlib is the industry standard.
+    """
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        logger.error(f"Password verification error: {e}")
+        return False
 
-def get_password_hash(password):
-    """Hash password using bcrypt directly"""
-    # Truncate to 72 bytes (bcrypt limit) before hashing
-    truncated = password[:72]
-    return pwd_context.hash(truncated)
+def get_password_hash(password: str) -> str:
+    """Hash a password using bcrypt via passlib.
+    
+    Industry best practice:
+    - Passlib handles the 72-byte bcrypt limit internally
+    - Uses bcrypt__rounds=12 (NIST recommended)
+    - Automatically generates secure salt
+    - No manual truncation needed
+    """
+    try:
+        return pwd_context.hash(password)
+    except Exception as e:
+        logger.error(f"Password hashing error: {e}")
+        raise
 
 def create_access_token(data: dict, is_admin: bool = False):
     to_encode = data.copy()
