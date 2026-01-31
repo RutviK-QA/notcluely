@@ -111,22 +111,17 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # Helper functions
-def hash_password_for_bcrypt(password: str) -> str:
-    """Hash password with SHA256 first to ensure it's always fixed length for bcrypt"""
-    # Truncate password to 72 bytes before hashing to avoid bcrypt limit issues
-    truncated = password[:72]
-    sha256_hash = hashlib.sha256(truncated.encode()).hexdigest()
-    return sha256_hash
-
 def verify_password(plain_password, hashed_password):
-    """Verify password by hashing with SHA256 then checking against bcrypt hash"""
-    sha256_hash = hash_password_for_bcrypt(plain_password)
-    return pwd_context.verify(sha256_hash, hashed_password)
+    """Verify password using bcrypt directly"""
+    # Truncate to 72 bytes (bcrypt limit) before verifying
+    truncated = plain_password[:72]
+    return pwd_context.verify(truncated, hashed_password)
 
 def get_password_hash(password):
-    """Hash password: SHA256 -> bcrypt"""
-    sha256_hash = hash_password_for_bcrypt(password)
-    return pwd_context.hash(sha256_hash)
+    """Hash password using bcrypt directly"""
+    # Truncate to 72 bytes (bcrypt limit) before hashing
+    truncated = password[:72]
+    return pwd_context.hash(truncated)
 
 def create_access_token(data: dict, is_admin: bool = False):
     to_encode = data.copy()
