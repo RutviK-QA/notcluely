@@ -545,11 +545,6 @@ async def create_booking(booking_data: BookingCreate, current_user: dict = Depen
             min(booking_data.end_time, conflict['end_time']),
             conflict_notif_created_at
         ))
-            conflict['user_name'], current_user['username'],
-            max(booking_data.start_time, conflict['start_time']),
-            min(booking_data.end_time, conflict['end_time']),
-            conflict_notif_created_at
-        ))
     
     conn.commit()
     conn.close()
