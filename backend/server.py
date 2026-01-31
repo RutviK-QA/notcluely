@@ -14,6 +14,7 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 import sqlite3
 import json
+import hashlib
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -107,11 +108,19 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # Helper functions
+def hash_password_for_bcrypt(password: str) -> str:
+    """Hash password with SHA256 first to ensure it's always 64 bytes for bcrypt"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password by hashing with SHA256 then checking against bcrypt hash"""
+    sha256_hash = hash_password_for_bcrypt(plain_password)
+    return pwd_context.verify(sha256_hash, hashed_password)
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    """Hash password: SHA256 -> bcrypt"""
+    sha256_hash = hash_password_for_bcrypt(password)
+    return pwd_context.hash(sha256_hash)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
