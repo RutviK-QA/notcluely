@@ -10,11 +10,10 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 import pytz
-from passlib.context import CryptContext
+import bcrypt
 from jose import JWTError, jwt
 import sqlite3
 import json
-import hashlib
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -90,12 +89,15 @@ def init_db():
 # Initialize database on startup
 init_db()
 
-# Password hashing - Industry standard configuration
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12  # NIST recommended round count
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Password hashing constants
+BCRYPT_ROUNDS = 12  # NIST recommended
 
 # JWT settings
 SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
@@ -116,30 +118,65 @@ api_router = APIRouter(prefix="/api")
 
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a bcrypt hash.
+    """Verify a password against a bcrypt hash using bcrypt directly.
     
-    Passlib handles all bcrypt compatibility and truncation internally.
-    No manual truncation needed - passlib is the industry standard.
+    Industry best practice:
+    - Uses bcrypt directly (modern, well-maintained)
+    - Handles UTF-8 encoding automatically
+    - Returns bool instead of raising exceptions
     """
     try:
-        return pwd_context.verify(plain_password, hashed_password)
+        logger.debug(f"Verifying password - hash type: {type(hashed_password)}, password type: {type(plain_password)}")
+        
+        # Ensure hashed_password is bytes
+        if isinstance(hashed_password, str):
+            hashed_password = hashed_password.encode('utf-8')
+        
+        # Ensure plain_password is bytes
+        if isinstance(plain_password, str):
+            plain_password = plain_password.encode('utf-8')
+        
+        result = bcrypt.checkpw(plain_password, hashed_password)
+        logger.debug(f"Password verification result: {result}")
+        return result
     except Exception as e:
-        logger.error(f"Password verification error: {e}")
+        logger.error(f"Password verification error: {type(e).__name__}: {e}", exc_info=True)
         return False
 
 def get_password_hash(password: str) -> str:
-    """Hash a password using bcrypt via passlib.
+    """Hash a password using bcrypt directly.
     
     Industry best practice:
-    - Passlib handles the 72-byte bcrypt limit internally
-    - Uses bcrypt__rounds=12 (NIST recommended)
-    - Automatically generates secure salt
-    - No manual truncation needed
+    - Uses bcrypt directly (modern, well-maintained library)
+    - Automatically handles 72-byte password limit
+    - Generates cryptographically secure salt
+    - Returns base64-encoded hash string
     """
     try:
-        return pwd_context.hash(password)
+        logger.debug(f"Hashing password - length: {len(password)}, type: {type(password)}")
+        
+        # Ensure password is bytes
+        if isinstance(password, str):
+            password_bytes = password.encode('utf-8')
+        else:
+            password_bytes = password
+        
+        logger.debug(f"Password bytes length: {len(password_bytes)}")
+        
+        # Hash with bcrypt (12 rounds = NIST recommended)
+        salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+        logger.debug(f"Generated salt: {salt}")
+        
+        hashed = bcrypt.hashpw(password_bytes, salt)
+        logger.debug(f"Hash generated successfully - hash length: {len(hashed)}")
+        
+        # Return as string for database storage
+        hash_string = hashed.decode('utf-8')
+        logger.debug(f"Hash string: {hash_string[:20]}... (truncated for logging)")
+        
+        return hash_string
     except Exception as e:
-        logger.error(f"Password hashing error: {e}")
+        logger.error(f"Password hashing error: {type(e).__name__}: {e}", exc_info=True)
         raise
 
 def create_access_token(data: dict, is_admin: bool = False):
@@ -284,10 +321,15 @@ async def root():
 # Auth routes
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserRegister):
+    logger.info(f"=== REGISTRATION START ===")
+    logger.info(f"Username: {user_data.username}")
+    
     # Validate input
     username = user_data.username.strip().lower()
+    logger.debug(f"Normalized username: {username}")
     
     if len(username) < 3:
+        logger.warning(f"Username too short: {len(username)} chars")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username must be at least 3 characters"
@@ -295,12 +337,14 @@ async def register(user_data: UserRegister):
     
     # Check for valid username characters (alphanumeric and underscore only)
     if not username.replace('_', '').isalnum():
+        logger.warning(f"Invalid username characters in: {username}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username can only contain letters, numbers, and underscores"
         )
     
     if len(user_data.password) < 8:
+        logger.warning(f"Password too short: {len(user_data.password)} chars")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must be at least 8 characters"
@@ -310,14 +354,17 @@ async def register(user_data: UserRegister):
     has_upper = any(c.isupper() for c in user_data.password)
     has_lower = any(c.islower() for c in user_data.password)
     has_digit = any(c.isdigit() for c in user_data.password)
+    logger.debug(f"Password complexity - upper: {has_upper}, lower: {has_lower}, digit: {has_digit}")
     
     if not (has_upper and has_lower and has_digit):
+        logger.warning(f"Password doesn't meet complexity requirements")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password must contain uppercase, lowercase, and digits"
         )
     
     # Check if username already exists (case-insensitive)
+    logger.debug("Checking for existing username...")
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
@@ -325,6 +372,7 @@ async def register(user_data: UserRegister):
     
     if existing:
         conn.close()
+        logger.warning(f"Username already exists: {username}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already exists"
@@ -335,6 +383,7 @@ async def register(user_data: UserRegister):
         user_data.timezone = "UTC"
     
     if user_data.timezone not in pytz.all_timezones:
+        logger.warning(f"Invalid timezone: {user_data.timezone}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid timezone"
@@ -342,32 +391,53 @@ async def register(user_data: UserRegister):
     
     # Check if user should be admin (username is "rutvik", case-insensitive)
     is_admin = username == "rutvik"
+    logger.debug(f"Is admin: {is_admin}")
     
     # Create user
-    user_id = str(uuid.uuid4())
-    created_at = datetime.now(timezone.utc).isoformat()
-    password_hash = get_password_hash(user_data.password)
+    try:
+        logger.info(f"Starting password hashing for user: {username}")
+        user_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc).isoformat()
+        password_hash = get_password_hash(user_data.password)
+        logger.info(f"Password hash created successfully")
+        
+        logger.debug(f"Inserting user into database: {user_id}")
+        cursor.execute('''
+            INSERT INTO users (id, username, password_hash, timezone, is_admin, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, username, password_hash, user_data.timezone, is_admin, created_at))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"User registered successfully: {username} (id: {user_id})")
+        
+        # Create access token with admin status
+        logger.debug("Creating access token...")
+        access_token = create_access_token(data={"sub": user_id}, is_admin=is_admin)
+        logger.info(f"=== REGISTRATION COMPLETE ===")
+        
+        user_response = UserResponse(
+            id=user_id,
+            username=username,
+            timezone=user_data.timezone,
+            is_admin=is_admin,
+            created_at=datetime.fromisoformat(created_at)
+        )
+        
+        return TokenResponse(access_token=access_token, user=user_response)
     
-    cursor.execute('''
-        INSERT INTO users (id, username, password_hash, timezone, is_admin, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, username, password_hash, user_data.timezone, is_admin, created_at))
-    
-    conn.commit()
-    conn.close()
-    
-    # Create access token with admin status
-    access_token = create_access_token(data={"sub": user_id}, is_admin=is_admin)
-    
-    user_response = UserResponse(
-        id=user_id,
-        username=username,
-        timezone=user_data.timezone,
-        is_admin=is_admin,
-        created_at=datetime.fromisoformat(created_at)
-    )
-    
-    return TokenResponse(access_token=access_token, user=user_response)
+    except Exception as e:
+        logger.error(f"=== REGISTRATION FAILED ===", exc_info=True)
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        if hasattr(e, '__traceback__'):
+            import traceback
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
+        conn.close()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Registration failed: {str(e)}"
+        )
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(user_data: UserLogin):
