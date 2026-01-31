@@ -441,75 +441,113 @@ async def register(user_data: UserRegister):
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(user_data: UserLogin):
-    # Find user (case-insensitive username)
-    username = user_data.username.strip().lower()
+    logger.info(f"=== LOGIN START ===")
+    logger.info(f"Username: {user_data.username}")
     
-    # Check rate limit
-    if not check_rate_limit(username):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Too many login attempts. Please try again in {LOCK_TIME_MINUTES} minutes."
-        )
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
-    user_row = cursor.fetchone()
-    conn.close()
-    
-    if not user_row:
-        # Record failed attempt without revealing if user exists
-        record_login_attempt(username)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password"
-        )
-    
-    user = dict(user_row)
-    
-    # Verify password
-    if not verify_password(user_data.password, user['password_hash']):
-        # Record failed attempt
-        record_login_attempt(username)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password"
-        )
-    
-    # Clear rate limit on successful login
-    clear_login_attempts(username)
-    
-    # Update admin status on every login (in case username changes)
-    is_admin = username == "rutvik"
-    if user.get('is_admin') != is_admin:
+    try:
+        # Find user (case-insensitive username)
+        username = user_data.username.strip().lower()
+        logger.debug(f"Normalized username: {username}")
+        
+        # Check rate limit
+        logger.debug("Checking rate limit...")
+        if not check_rate_limit(username):
+            logger.warning(f"Rate limit exceeded for user: {username}")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many login attempts. Please try again in {LOCK_TIME_MINUTES} minutes."
+            )
+        
+        logger.debug("Querying database for user...")
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('UPDATE users SET is_admin = ? WHERE id = ?', (is_admin, user['id']))
-        conn.commit()
+        cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+        user_row = cursor.fetchone()
         conn.close()
-        user['is_admin'] = is_admin
+        
+        if not user_row:
+            logger.warning(f"User not found: {username}")
+            # Record failed attempt without revealing if user exists
+            record_login_attempt(username)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        
+        logger.debug(f"User found: {username}")
+        user = dict(user_row)
+        
+        # Verify password
+        logger.debug("Verifying password...")
+        if not verify_password(user_data.password, user['password_hash']):
+            logger.warning(f"Invalid password for user: {username}")
+            # Record failed attempt
+            record_login_attempt(username)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        
+        logger.info(f"Password verified for user: {username}")
+        
+        # Clear rate limit on successful login
+        logger.debug("Clearing login attempts...")
+        clear_login_attempts(username)
     
-    # Create access token with admin status
-    access_token = create_access_token(data={"sub": user['id']}, is_admin=is_admin)
+        
+        logger.info(f"Password verified for user: {username}")
+        
+        # Clear rate limit on successful login
+        logger.debug("Clearing login attempts...")
+        clear_login_attempts(username)
+        
+        # Update admin status on every login (in case username changes)
+        is_admin = username == "rutvik"
+        if user.get('is_admin') != is_admin:
+            logger.debug(f"Updating admin status for {username}: {is_admin}")
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET is_admin = ? WHERE id = ?', (is_admin, user['id']))
+            conn.commit()
+            conn.close()
+            user['is_admin'] = is_admin
+        
+        # Create access token with admin status
+        logger.debug("Creating access token...")
+        access_token = create_access_token(data={"sub": user['id']}, is_admin=is_admin)
+        logger.info(f"=== LOGIN COMPLETE ===")
+        
+        # Convert ISO string timestamps
+        if isinstance(user.get('created_at'), str):
+            user['created_at'] = datetime.fromisoformat(user['created_at'])
+        
+        user['is_admin'] = bool(user['is_admin'])
+        
+        user_response = UserResponse(
+            id=user['id'],
+            username=user['username'],
+            timezone=user['timezone'],
+            is_admin=user['is_admin'],
+            created_at=user['created_at']
+        )
+        
+        return TokenResponse(access_token=access_token, user=user_response)
     
-    # Convert ISO string timestamps
-    if isinstance(user.get('created_at'), str):
-        user['created_at'] = datetime.fromisoformat(user['created_at'])
-    
-    user['is_admin'] = bool(user['is_admin'])
-    
-    user_response = UserResponse(
-        id=user['id'],
-        username=user['username'],
-        timezone=user['timezone'],
-        is_admin=user['is_admin'],
-        created_at=user['created_at']
-    )
-    
-    return TokenResponse(access_token=access_token, user=user_response)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"=== LOGIN FAILED ===", exc_info=True)
+        logger.error(f"Error type: {type(e).__name__}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login failed: {str(e)}"
+        )
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
+    logger.debug(f"=== GET ME (current user info) ===")
+    logger.debug(f"User: {current_user['username']} (id: {current_user['id']})")
+    
     return UserResponse(
         id=current_user['id'],
         username=current_user['username'],
@@ -559,105 +597,142 @@ async def get_all_users(current_user: dict = Depends(get_current_user)):
 # Booking routes
 @api_router.post("/bookings", response_model=Booking)
 async def create_booking(booking_data: BookingCreate, current_user: dict = Depends(get_current_user)):
-    # Validate booking data
-    if not booking_data.title or not booking_data.title.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Booking title cannot be empty"
-        )
+    logger.info(f"=== CREATE BOOKING START ===")
+    logger.info(f"User: {current_user.get('username')} (id: {current_user.get('id')})")
+    logger.debug(f"Booking data: title={booking_data.title}, start={booking_data.start_time}, end={booking_data.end_time}")
     
-    if len(booking_data.title.strip()) > 255:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Booking title too long (max 255 characters)"
-        )
-    
-    # Check for conflicts
-    start_dt = datetime.fromisoformat(booking_data.start_time.replace('Z', '+00:00'))
-    end_dt = datetime.fromisoformat(booking_data.end_time.replace('Z', '+00:00'))
-    
-    # Validate date range
-    now = datetime.now(timezone.utc)
-    if start_dt < now:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot create bookings in the past"
-        )
-    
-    if start_dt >= end_dt:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Start time must be before end time"
-        )
-    
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM bookings')
-    existing_bookings = [dict(row) for row in cursor.fetchall()]
-    
-    conflicts = []
-    for existing in existing_bookings:
-        existing_start = datetime.fromisoformat(existing['start_time'].replace('Z', '+00:00'))
-        existing_end = datetime.fromisoformat(existing['end_time'].replace('Z', '+00:00'))
+    try:
+        # Validate booking data
+        if not booking_data.title or not booking_data.title.strip():
+            logger.warning("Booking title is empty")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Booking title cannot be empty"
+            )
         
-        # Check for overlap
-        if (start_dt < existing_end and end_dt > existing_start):
-            conflicts.append(existing)
-    
-    # Create booking
-    booking_id = str(uuid.uuid4())
-    created_at = datetime.now(timezone.utc).isoformat()
-    
-    cursor.execute('''
-        INSERT INTO bookings (id, user_id, user_name, title, start_time, end_time, notes, user_timezone, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        booking_id, current_user['id'], current_user['username'], 
-        booking_data.title, booking_data.start_time, booking_data.end_time, 
-        booking_data.notes, booking_data.user_timezone, created_at
-    ))
-    
-    conn.commit()
-    
-    # Create conflict notifications if there are conflicts
-    for conflict in conflicts:
-        conflict_id = str(uuid.uuid4())
-        conflict_notif_created_at = datetime.now(timezone.utc).isoformat()
+        if len(booking_data.title.strip()) > 255:
+            logger.warning(f"Booking title too long: {len(booking_data.title.strip())} chars")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Booking title too long (max 255 characters)"
+            )
+        
+        # Check for conflicts
+        logger.debug(f"Parsing start_time: {booking_data.start_time}")
+        start_dt = datetime.fromisoformat(booking_data.start_time.replace('Z', '+00:00'))
+        logger.debug(f"Parsed start_time: {start_dt}")
+        
+        logger.debug(f"Parsing end_time: {booking_data.end_time}")
+        end_dt = datetime.fromisoformat(booking_data.end_time.replace('Z', '+00:00'))
+        logger.debug(f"Parsed end_time: {end_dt}")
+        
+        # Validate date range
+        now = datetime.now(timezone.utc)
+        logger.debug(f"Current UTC time: {now}")
+        
+        if start_dt < now:
+            logger.warning(f"Cannot create booking in past: start_dt={start_dt} < now={now}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot create bookings in the past"
+            )
+        
+        if start_dt >= end_dt:
+            logger.warning(f"Invalid time range: start_dt={start_dt} >= end_dt={end_dt}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Start time must be before end time"
+            )
+        
+        logger.debug("Fetching existing bookings...")
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM bookings')
+        existing_bookings = [dict(row) for row in cursor.fetchall()]
+        logger.debug(f"Found {len(existing_bookings)} existing bookings")
+        
+        conflicts = []
+        for existing in existing_bookings:
+            existing_start = datetime.fromisoformat(existing['start_time'].replace('Z', '+00:00'))
+            existing_end = datetime.fromisoformat(existing['end_time'].replace('Z', '+00:00'))
+            
+            # Check for overlap
+            if (start_dt < existing_end and end_dt > existing_start):
+                logger.info(f"Found conflict with booking {existing['id']}")
+                conflicts.append(existing)
+        
+        logger.info(f"Total conflicts found: {len(conflicts)}")
+        
+        # Create booking
+        booking_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc).isoformat()
+        logger.debug(f"Creating booking: id={booking_id}, title={booking_data.title}")
         
         cursor.execute('''
-            INSERT INTO conflicts (id, booking1_id, booking2_id, user1_id, user2_id, user1_name, user2_name, conflict_start, conflict_end, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO bookings (id, user_id, user_name, title, start_time, end_time, notes, user_timezone, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            conflict_id, conflict['id'], booking_id, conflict['user_id'], current_user['id'],
-            conflict['user_name'], current_user['username'],
-            max(booking_data.start_time, conflict['start_time']),
-            min(booking_data.end_time, conflict['end_time']),
-            conflict_notif_created_at
+            booking_id, current_user['id'], current_user['username'], 
+            booking_data.title, booking_data.start_time, booking_data.end_time, 
+            booking_data.notes, booking_data.user_timezone, created_at
         ))
+        
+        conn.commit()
+        logger.debug("Booking inserted into database")
+        
+        # Create conflict notifications if there are conflicts
+        for conflict in conflicts:
+            conflict_id = str(uuid.uuid4())
+            conflict_notif_created_at = datetime.now(timezone.utc).isoformat()
+            logger.debug(f"Creating conflict record: id={conflict_id}")
+            
+            cursor.execute('''
+                INSERT INTO conflicts (id, booking1_id, booking2_id, user1_id, user2_id, user1_name, user2_name, conflict_start, conflict_end, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                conflict_id, conflict['id'], booking_id, conflict['user_id'], current_user['id'],
+                conflict['user_name'], current_user['username'],
+                max(booking_data.start_time, conflict['start_time']),
+                min(booking_data.end_time, conflict['end_time']),
+                conflict_notif_created_at
+            ))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"=== CREATE BOOKING COMPLETE ===")
+        
+        return Booking(
+            id=booking_id,
+            user_id=current_user['id'],
+            user_name=current_user['username'],
+            title=booking_data.title,
+            start_time=booking_data.start_time,
+            end_time=booking_data.end_time,
+            notes=booking_data.notes,
+            user_timezone=booking_data.user_timezone,
+            created_at=datetime.fromisoformat(created_at)
+        )
     
-    conn.commit()
-    conn.close()
-    
-    return Booking(
-        id=booking_id,
-        user_id=current_user['id'],
-        user_name=current_user['username'],
-        title=booking_data.title,
-        start_time=booking_data.start_time,
-        end_time=booking_data.end_time,
-        notes=booking_data.notes,
-        user_timezone=booking_data.user_timezone,
-        created_at=datetime.fromisoformat(created_at)
-    )
+    except Exception as e:
+        logger.error(f"=== CREATE BOOKING FAILED ===", exc_info=True)
+        logger.error(f"Error type: {type(e).__name__}: {str(e)}")
+        if 'conn' in locals():
+            conn.close()
+        raise
 
 @api_router.get("/bookings", response_model=List[Booking])
 async def get_bookings(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    cursor = conn.cursor()
+    logger.info(f"=== GET BOOKINGS START ===")
+    logger.debug(f"User: {current_user.get('username')}, is_admin: {current_user.get('is_admin')}")
     
-    # If admin, return all bookings. Otherwise, return only their own.
-    if current_user.get('is_admin', False):
-        cursor.execute('SELECT * FROM bookings')
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # If admin, return all bookings. Otherwise, return only their own.
+        if current_user.get('is_admin', False):
+            logger.debug("Admin user - fetching all bookings")
+            cursor.execute('SELECT * FROM bookings')
     else:
         cursor.execute('SELECT * FROM bookings WHERE user_id = ?', (current_user['id'],))
     
@@ -675,53 +750,80 @@ async def get_bookings(current_user: dict = Depends(get_current_user)):
 
 @api_router.delete("/bookings/{booking_id}")
 async def delete_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    cursor = conn.cursor()
+    logger.info(f"=== DELETE BOOKING START ===")
+    logger.info(f"Booking ID: {booking_id}, User: {current_user['username']}")
     
-    # Get booking
-    cursor.execute('SELECT * FROM bookings WHERE id = ?', (booking_id,))
-    booking_row = cursor.fetchone()
-    
-    if not booking_row:
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Get booking
+        logger.debug(f"Fetching booking {booking_id}...")
+        cursor.execute('SELECT * FROM bookings WHERE id = ?', (booking_id,))
+        booking_row = cursor.fetchone()
+        
+        if not booking_row:
+            logger.warning(f"Booking not found: {booking_id}")
+            conn.close()
+            raise HTTPException(status_code=404, detail="Booking not found")
+        
+        booking = dict(booking_row)
+        logger.debug(f"Found booking: {booking['title']} by {booking['user_name']}")
+        
+        # Check if user owns the booking or is admin
+        if booking['user_id'] != current_user['id'] and not current_user.get('is_admin', False):
+            logger.warning(f"Unauthorized delete attempt by {current_user['username']} on booking {booking_id}")
+            conn.close()
+            raise HTTPException(
+                status_code=403, 
+                detail="You do not have permission to delete this booking"
+            )
+        
+        logger.debug(f"Deleting booking {booking_id}...")
+        cursor.execute('DELETE FROM bookings WHERE id = ?', (booking_id,))
+        
+        # Delete related conflicts
+        logger.debug(f"Deleting related conflicts...")
+        cursor.execute('''
+            DELETE FROM conflicts 
+            WHERE booking1_id = ? OR booking2_id = ?
+        ''', (booking_id, booking_id))
+        
+        conn.commit()
         conn.close()
-        raise HTTPException(status_code=404, detail="Booking not found")
+        logger.info(f"=== DELETE BOOKING COMPLETE ===")
+        
+        return {"success": True}
     
-    booking = dict(booking_row)
-    
-    # Check if user owns the booking or is admin
-    if booking['user_id'] != current_user['id'] and not current_user.get('is_admin', False):
-        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"=== DELETE BOOKING FAILED ===", exc_info=True)
+        logger.error(f"Error: {type(e).__name__}: {str(e)}")
         raise HTTPException(
-            status_code=403, 
-            detail="You do not have permission to delete this booking"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Delete failed: {str(e)}"
         )
-    
-    cursor.execute('DELETE FROM bookings WHERE id = ?', (booking_id,))
-    
-    # Delete related conflicts
-    cursor.execute('''
-        DELETE FROM conflicts 
-        WHERE booking1_id = ? OR booking2_id = ?
-    ''', (booking_id, booking_id))
-    
-    conn.commit()
-    conn.close()
-    
-    return {"success": True}
 
 # Conflict routes
 @api_router.get("/conflicts", response_model=List[ConflictNotification])
 async def get_conflicts(current_user: dict = Depends(get_current_user)):
-    conn = get_db()
-    cursor = conn.cursor()
+    logger.debug(f"=== GET CONFLICTS START ===")
+    logger.debug(f"User: {current_user['username']}, is_admin: {current_user.get('is_admin')}")
     
-    if current_user.get('is_admin', False):
-        cursor.execute('SELECT * FROM conflicts WHERE resolved = 0')
-    else:
-        cursor.execute('''
-            SELECT * FROM conflicts 
-            WHERE resolved = 0 AND (user1_id = ? OR user2_id = ?)
-        ''', (current_user['id'], current_user['id']))
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        if current_user.get('is_admin', False):
+            logger.debug("Admin user - fetching all unresolved conflicts")
+            cursor.execute('SELECT * FROM conflicts WHERE resolved = 0')
+        else:
+            logger.debug(f"Regular user - fetching conflicts for {current_user['username']}")
+            cursor.execute('''
+                SELECT * FROM conflicts 
+                WHERE resolved = 0 AND (user1_id = ? OR user2_id = ?)
+            ''', (current_user['id'], current_user['id']))
     
     conflicts_rows = cursor.fetchall()
     conn.close()
